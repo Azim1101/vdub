@@ -143,6 +143,14 @@ Point the app at it via the in-app field, or bake a default in:
 
 ---
 
+## Download the APK
+
+**[⬇ vdub-step1-debug.apk](https://github.com/Azim1101/vdub/releases/download/step1-latest/vdub-step1-debug.apk)**  (~28 MB)
+
+Every push to this branch rebuilds it and replaces the `step1-latest` release.
+On first run, grant **All files access** via the folder icon — the pipeline reads and
+writes `/storage/emulated/0/AI/` directly.
+
 ## Build
 
 The Gradle **wrapper JAR is not committed** (it's a binary and this repo was scaffolded
