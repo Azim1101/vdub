@@ -29,6 +29,36 @@ data class ScriptLine(
     val durationSec: Double get() = (end - start).coerceAtLeast(0.0)
 }
 
+/**
+ * How strongly a line should be delivered, per emotion.
+ * Feeds the TTS stage: ANGRY 1.4 / HAPPY 1.1 etc. from the pipeline notes.
+ */
+object EmotionStyle {
+    private val EXAGGERATION = mapOf(
+        "angry" to 1.4f,
+        "happy" to 1.1f,
+        "sad" to 0.9f,
+        "surprised" to 1.25f,
+        "fearful" to 1.15f,
+        "disgusted" to 1.2f,
+        "neutral" to 1.0f,
+        "other" to 1.0f,
+        "unk" to 1.0f
+    )
+
+    const val DEFAULT = "neutral"
+
+    val KNOWN: List<String> = EXAGGERATION.keys.toList()
+
+    fun exaggeration(emotion: String?): Float =
+        EXAGGERATION[emotion?.lowercase()?.trim()] ?: 1.0f
+
+    fun normalise(raw: String?): String {
+        val e = raw?.lowercase()?.trim().orEmpty()
+        return if (e.isBlank() || e !in EXAGGERATION) DEFAULT else e
+    }
+}
+
 /** Step 2 output: out/script_speakers.json */
 @Serializable
 data class SpeakerLine(
@@ -37,8 +67,17 @@ data class SpeakerLine(
     @SerialName("end") val end: Double,
     @SerialName("text") val text: String,
     @SerialName("spk") val spk: String,              // "Speaker 1"
-    @SerialName("emotion") val emotion: String = "NEUTRAL",
+    @SerialName("emotion") val emotion: String = "neutral",
+    @SerialName("emotion_score") val emotionScore: Float = 0f,
     @SerialName("hi") val hi: String = ""            // translated text, Step 4
+)
+
+/** Step 3 output: out/script_emotion.json */
+@Serializable
+data class EmotionScript(
+    @SerialName("project") val project: String,
+    @SerialName("counts") val counts: Map<String, Int> = emptyMap(),
+    @SerialName("lines") val lines: List<SpeakerLine> = emptyList()
 )
 
 @Serializable

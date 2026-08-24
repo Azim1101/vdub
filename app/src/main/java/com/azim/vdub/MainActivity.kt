@@ -57,6 +57,11 @@ import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.azim.vdub.ui.ClipsPreviewSection
+import com.azim.vdub.ui.EmotionLinesSection
+import com.azim.vdub.ui.EmotionModelCard
+import com.azim.vdub.ui.EmotionSection
+import com.azim.vdub.ui.NextStep4Button
+import com.azim.vdub.ui.Step3ViewModel
 import com.azim.vdub.ui.ModelStatusCard
 import com.azim.vdub.ui.NextStep3Button
 import com.azim.vdub.ui.NextStepButton
@@ -103,7 +108,7 @@ fun VdubRoot() {
     when (screen) {
         1 -> Step1Screen(
             onProjectChanged = { project = it },
-            onOpenSettings = { screen = 3 },
+            onOpenSettings = { screen = 9 },
             onNext = { name ->
                 project = name
                 screen = 2
@@ -112,7 +117,13 @@ fun VdubRoot() {
         2 -> Step2Screen(
             project = project,
             onBack = { screen = 1 },
-            onOpenSettings = { screen = 3 }
+            onOpenSettings = { screen = 9 },
+            onNext = { screen = 3 }
+        )
+        3 -> Step3Screen(
+            project = project,
+            onBack = { screen = 2 },
+            onOpenSettings = { screen = 9 }
         )
         else -> SettingsScreen(
             onBack = { screen = 1 },
@@ -123,10 +134,104 @@ fun VdubRoot() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun Step3Screen(
+    project: String,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    vm: Step3ViewModel = hiltViewModel()
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(project) { vm.load(project) }
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            vm.dismissMessage()
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎬 vdub")
+                        Spacer(Modifier.width(10.dp))
+                        StepBadge(
+                            text = if (state.step3Done) "Step 3 ✓" else "Step 3",
+                            done = state.step3Done
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Step 2")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                EmotionModelCard(
+                    present = state.modelPresent,
+                    path = state.modelPath,
+                    sizeBytes = state.modelSizeBytes,
+                    job = state.job,
+                    busy = state.busy,
+                    onDownload = vm::downloadModel
+                )
+            }
+            item {
+                EmotionSection(
+                    clipCount = state.clipCount,
+                    counts = state.counts,
+                    modelPresent = state.modelPresent,
+                    busy = state.busy,
+                    job = state.job,
+                    onDetect = vm::detect,
+                    onCancel = vm::cancel
+                )
+            }
+            item {
+                EmotionLinesSection(
+                    lines = state.lines,
+                    speakerName = state::speakerName,
+                    onSetEmotion = vm::setEmotion
+                )
+            }
+            item { NextStep4Button(enabled = state.step3Done && !state.busy) { } }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun Step2Screen(
     project: String,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
+    onNext: () -> Unit,
     vm: Step2ViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -219,7 +324,7 @@ fun Step2Screen(
                 )
             }
             item {
-                NextStep3Button(enabled = state.step2Done && !state.busy) { }
+                NextStep3Button(enabled = state.step2Done && !state.busy, onClick = onNext)
             }
             item { Spacer(Modifier.height(20.dp)) }
         }

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.azim.vdub.audio.AudioExtractor
 import com.azim.vdub.audio.ClipCutter
+import com.azim.vdub.audio.EmotionClassifier
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
 import com.azim.vdub.core.VdubPaths
@@ -15,6 +16,8 @@ import com.azim.vdub.data.local.ProjectDao
 import com.azim.vdub.data.local.ProjectEntity
 import com.azim.vdub.data.model.ScriptLine
 import com.azim.vdub.data.model.ScriptRaw
+import com.azim.vdub.data.model.EmotionScript
+import com.azim.vdub.data.model.EmotionStyle
 import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.model.SpeakerScript
 import com.azim.vdub.data.model.SrtCue
@@ -484,6 +487,90 @@ class ProjectRepository @Inject constructor(
             writeSpeakerScript(project, updated)
             updated
         }
+
+    // ------------------------------------------------------- Step 3: emotion
+
+    /**
+     * Classify every clip and merge the label into the speaker script.
+     * Runs after diarization so one file carries both, which is what the
+     * TTS stage reads.
+     */
+    suspend fun detectEmotions(
+        project: String,
+        onProgress: (Int, Int) -> Unit
+    ): EmotionScript = withContext(Dispatchers.Default) {
+        val speakers = readSpeakerScript(project)
+            ?: error("Run Step 2 (speakers) first")
+        require(speakers.lines.isNotEmpty()) { "No lines to classify" }
+
+        val clips = speakers.lines.map { File(VdubPaths.clipsDir(project), it.utt + ".wav") }
+        val missing = clips.count { !it.exists() }
+        check(missing == 0) {
+            "$missing of ${clips.size} clips are missing — re-run the Step 1 trim."
+        }
+
+        val results = EmotionClassifier.open().use { it.classifyAll(clips, onProgress) }
+        check(results.isNotEmpty()) { "emotion2vec produced no results" }
+
+        val lines = speakers.lines.map { line ->
+            val r = results[line.utt]
+            if (r == null) line
+            else line.copy(
+                emotion = EmotionStyle.normalise(r.label),
+                emotionScore = r.confidence
+            )
+        }
+
+        val counts = lines.groupingBy { it.emotion }.eachCount()
+        val script = EmotionScript(project = project, counts = counts, lines = lines)
+        withContext(Dispatchers.IO) {
+            VdubPaths.ensureProject(project)
+            VdubPaths.scriptEmotion(project)
+                .writeText(json.encodeToString(EmotionScript.serializer(), script))
+        }
+
+        // keep script_speakers.json authoritative too
+        writeSpeakerScript(project, speakers.copy(lines = lines))
+
+        // and mirror into script_raw.json for later steps
+        readScriptRaw(project)?.let { raw ->
+            val byUtt = lines.associateBy { it.utt }
+            writeScriptRaw(
+                project,
+                raw.lines.map { l -> l.copy(emotion = byUtt[clipName(l.id)]?.emotion) },
+                raw.cueCount
+            )
+        }
+
+        VdubPaths.markStepDone(project, 3)
+        script
+    }
+
+    /** Manual override — the model is a guess, the user is not. */
+    suspend fun setLineEmotion(project: String, utt: String, emotion: String): EmotionScript? =
+        withContext(Dispatchers.IO) {
+            val current = readEmotionScript(project) ?: return@withContext null
+            val lines = current.lines.map {
+                if (it.utt == utt) it.copy(
+                    emotion = EmotionStyle.normalise(emotion),
+                    emotionScore = 1f
+                ) else it
+            }
+            val updated = current.copy(
+                lines = lines,
+                counts = lines.groupingBy { it.emotion }.eachCount()
+            )
+            VdubPaths.scriptEmotion(project)
+                .writeText(json.encodeToString(EmotionScript.serializer(), updated))
+            readSpeakerScript(project)?.let { writeSpeakerScript(project, it.copy(lines = lines)) }
+            updated
+        }
+
+    suspend fun readEmotionScript(project: String): EmotionScript? = withContext(Dispatchers.IO) {
+        val f = VdubPaths.scriptEmotion(project)
+        if (!f.exists()) return@withContext null
+        runCatching { json.decodeFromString(EmotionScript.serializer(), f.readText()) }.getOrNull()
+    }
 
     suspend fun readSpeakerScript(project: String): SpeakerScript? = withContext(Dispatchers.IO) {
         val f = VdubPaths.scriptSpeakers(project)
