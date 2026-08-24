@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.SpeakerLine
 
@@ -82,7 +83,8 @@ fun ModelStatusCard(
                 if (present) {
                     "%.1f MB · %s".format(sizeBytes / 1024.0 / 1024.0, path)
                 } else {
-                    "The 28 MB CAM++ model is needed to tell voices apart. " +
+                    "The ${ModelCatalog.CAMPPLUS.sizeMb} MB CAM++ model is needed to " +
+                        "tell voices apart. " +
                         "Download it in Settings — no PC needed."
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -109,7 +111,10 @@ fun ModelStatusCard(
                 ) {
                     Icon(Icons.Default.CloudDownload, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (present) "Re-download model" else "Download model (28 MB)")
+                    Text(
+                        if (present) "Re-download model"
+                        else "Download model (${ModelCatalog.CAMPPLUS.sizeMb} MB)"
+                    )
                 }
             }
 

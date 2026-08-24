@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.data.model.EmotionStyle
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.SpeakerLine
@@ -88,7 +89,8 @@ fun EmotionModelCard(
             Spacer(Modifier.height(4.dp))
             Text(
                 if (present) "%.0f MB · %s".format(sizeBytes / 1024.0 / 1024.0, path)
-                else "The 355 MB model tags each line angry / happy / sad …, " +
+                else "The ${ModelCatalog.EMOTION2VEC.sizeMb} MB model tags each line " +
+                    "angry / happy / sad …, " +
                     "which drives how expressively it is spoken.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -105,7 +107,7 @@ fun EmotionModelCard(
                 ) {
                     Icon(Icons.Default.CloudDownload, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Download model (355 MB)")
+                    Text("Download model (${ModelCatalog.EMOTION2VEC.sizeMb} MB)")
                 }
             }
             if (downloading && running != null) {
