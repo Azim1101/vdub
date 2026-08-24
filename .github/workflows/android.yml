@@ -5,6 +5,9 @@ on:
     branches: [ "**" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Assemble debug APK
@@ -65,7 +68,13 @@ jobs:
               echo '```'
             } > /tmp/comment.md
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -f body@/tmp/comment.md >/dev/null || true
+              -F body=@/tmp/comment.md >/dev/null || true
+
+            # Annotations are readable via the check-runs API even when log
+            # artifacts are not, so fold the errors into one.
+            ERRS=$(grep -E "^e: |error:|What went wrong|^\s+> " /tmp/build.log \
+                   | head -40 | sed 's/%/%25/g; s/\r/ /g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=Gradle failure::${ERRS}"
           fi
           [ "${{ steps.compile.outcome }}" = "success" ]
 
