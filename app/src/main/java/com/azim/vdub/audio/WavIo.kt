@@ -70,7 +70,9 @@ object WavIo {
             var channels = 1
             var bits = 16
             val hdr = ByteArray(8)
-            while (raf.filePointer < raf.length() - 8) {
+            // <= so a chunk header ending exactly at EOF is still read; an
+            // empty `data` chunk (44-byte wav, zero-length clip) sits there.
+            while (raf.filePointer <= raf.length() - 8) {
                 raf.readFully(hdr)
                 val id = String(hdr, 0, 4)
                 val size = ByteBuffer.wrap(hdr, 4, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong()
