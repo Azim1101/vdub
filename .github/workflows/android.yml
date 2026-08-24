@@ -42,6 +42,8 @@ jobs:
 
       - name: Surface build output
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           {
             echo "## Gradle result: ${{ steps.compile.outcome }}"
@@ -49,12 +51,22 @@ jobs:
             grep -E "^e: |^w: |error:|FAILURE|What went wrong|^\s+> " /tmp/build.log \
               | head -120 || true
             echo '```'
-            echo "<details><summary>Last 200 lines</summary>"
-            echo '```'
-            tail -200 /tmp/build.log
-            echo '```'
-            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Log artifacts and blob storage are unreachable from the dev
+          # sandbox; a commit comment is served by api.github.com, which is not.
+          if [ "${{ steps.compile.outcome }}" != "success" ]; then
+            {
+              echo "Gradle failed on \`${GITHUB_SHA:0:7}\`"
+              echo
+              echo '```'
+              grep -E "^e: |error:|FAILURE|What went wrong|^\s+> " /tmp/build.log \
+                | head -80 || tail -80 /tmp/build.log
+              echo '```'
+            } > /tmp/comment.md
+            gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body@/tmp/comment.md >/dev/null || true
+          fi
           [ "${{ steps.compile.outcome }}" = "success" ]
 
       - name: Report APK size
