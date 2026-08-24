@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -53,9 +54,16 @@ val SpeakerColors = listOf(
 
 fun speakerColor(index: Int): Color = SpeakerColors[index % SpeakerColors.size]
 
-/** Model-missing banner — the most likely first-run failure. */
+/** Model status + one-tap download. No PC, no adb. */
 @Composable
-fun ModelStatusCard(present: Boolean, path: String) {
+fun ModelStatusCard(
+    present: Boolean,
+    path: String,
+    sizeBytes: Long,
+    busy: Boolean,
+    job: JobState,
+    onDownload: () -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -64,19 +72,81 @@ fun ModelStatusCard(present: Boolean, path: String) {
     ) {
         Column(Modifier.padding(12.dp)) {
             Text(
-                if (present) "campplus.onnx found ✓" else "campplus.onnx missing",
+                if (present) "campplus.onnx ready ✓" else "campplus.onnx missing",
                 style = MaterialTheme.typography.titleMedium,
                 color = if (present) MaterialTheme.colorScheme.secondary
                 else MaterialTheme.colorScheme.error
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                if (present) path
-                else "Push the 28 MB model, then reload:\n" +
-                    "adb push campplus.onnx /storage/emulated/0/AI/models/",
+                if (present) {
+                    "%.1f MB · %s".format(sizeBytes / 1024.0 / 1024.0, path)
+                } else {
+                    "The 28 MB CAM++ model is needed to tell voices apart. " +
+                        "Tap below to fetch it straight to your phone."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            // Only this card's own job should drive its progress bar —
+            // clustering runs in the section below and has its own.
+            val running = job as? JobState.Running
+            val downloading = running != null && (
+                running.label.contains("campplus", ignoreCase = true) ||
+                    running.label.startsWith("Verifying")
+                )
+
+            if (!present || downloading) {
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onDownload,
+                    enabled = !busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.CloudDownload, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (present) "Re-download model" else "Download model (28 MB)")
+                }
+            }
+
+            if (downloading && running != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "${running.label}" +
+                        if (running.detail.isNotBlank()) " · ${running.detail}" else "",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(6.dp))
+                if (running.progress >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { running.progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                }
+            }
+
+            if (!present && !downloading) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Already have it? Copy it to:\n$path",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

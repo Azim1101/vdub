@@ -8,6 +8,7 @@ import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.repo.ProjectRepository
+import com.azim.vdub.net.ModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,7 @@ data class Step2UiState(
     val projectName: String = "vdub_step",
     val modelPresent: Boolean = false,
     val modelPath: String = "",
+    val modelSizeBytes: Long = 0L,
     val clipCount: Int = 0,
     val embedCount: Int = 0,
     val threshold: Float = SpeakerCluster.DEFAULT_THRESHOLD,
@@ -48,7 +50,8 @@ data class Step2UiState(
 
 @HiltViewModel
 class Step2ViewModel @Inject constructor(
-    private val repo: ProjectRepository
+    private val repo: ProjectRepository,
+    private val modelDownloader: ModelDownloader
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(Step2UiState())
@@ -68,6 +71,7 @@ class Step2ViewModel @Inject constructor(
                 projectName = project,
                 modelPresent = SpeakerEmbedder.isModelPresent(),
                 modelPath = SpeakerEmbedder.modelFile().absolutePath,
+                modelSizeBytes = SpeakerEmbedder.modelFile().length(),
                 clipCount = clips,
                 embedCount = embeds?.size ?: 0,
                 threshold = speakerScript?.threshold ?: it.threshold,
@@ -96,6 +100,38 @@ class Step2ViewModel @Inject constructor(
         runningJob = null
         _state.update { it.copy(job = JobState.Idle, message = "Cancelled") }
     }
+
+    /** Fetch campplus.onnx straight to the phone — no PC or adb needed. */
+    fun downloadModel() = launchJob("Downloading campplus") {
+        val spec = ModelDownloader.CAMPPLUS
+        val file = modelDownloader.download(spec) { p ->
+            when (p) {
+                is ModelDownloader.Progress.Downloading -> progress(
+                    "Downloading campplus",
+                    if (p.total > 0) p.bytes.toFloat() / p.total else -1f,
+                    buildString {
+                        append(mb(p.bytes))
+                        if (p.total > 0) append(" / ").append(mb(p.total))
+                        if (p.mirror > 0) append("  (mirror ${p.mirror + 1}/${p.mirrorCount})")
+                    }
+                )
+                is ModelDownloader.Progress.Verifying ->
+                    progress("Verifying model", -1f, mb(p.bytes))
+            }
+        }
+        _state.update {
+            it.copy(
+                modelPresent = true,
+                modelPath = file.absolutePath,
+                modelSizeBytes = file.length(),
+                job = JobState.Done("Model ready", mb(file.length()))
+            )
+        }
+    }
+
+    private fun mb(b: Long) =
+        if (b < 1024 * 1024) "%.0f KB".format(b / 1024.0)
+        else "%.1f MB".format(b / 1024.0 / 1024.0)
 
     /** Full run: campplus over every clip, then cluster. */
     fun extractAndCluster() = launchJob("Extracting embeddings") {

@@ -164,7 +164,16 @@ fun Step2Screen(
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { ModelStatusCard(state.modelPresent, state.modelPath) }
+            item {
+                ModelStatusCard(
+                    present = state.modelPresent,
+                    path = state.modelPath,
+                    sizeBytes = state.modelSizeBytes,
+                    busy = state.busy,
+                    job = state.job,
+                    onDownload = vm::downloadModel
+                )
+            }
             item {
                 SpeakerSection(
                     speakers = state.speakers,
