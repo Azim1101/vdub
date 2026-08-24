@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -59,6 +60,7 @@ import com.azim.vdub.ui.ClipsPreviewSection
 import com.azim.vdub.ui.ModelStatusCard
 import com.azim.vdub.ui.NextStep3Button
 import com.azim.vdub.ui.NextStepButton
+import com.azim.vdub.ui.SettingsScreen
 import com.azim.vdub.ui.SpeakerSection
 import com.azim.vdub.ui.StorageWarningCard
 import com.azim.vdub.ui.Step2ViewModel
@@ -97,17 +99,24 @@ fun VdubRoot() {
     var screen by rememberSaveable { mutableStateOf(1) }
     var project by rememberSaveable { mutableStateOf("vdub_step") }
 
+    val context = LocalContext.current
     when (screen) {
         1 -> Step1Screen(
             onProjectChanged = { project = it },
+            onOpenSettings = { screen = 3 },
             onNext = { name ->
                 project = name
                 screen = 2
             }
         )
-        else -> Step2Screen(
+        2 -> Step2Screen(
             project = project,
-            onBack = { screen = 1 }
+            onBack = { screen = 1 },
+            onOpenSettings = { screen = 3 }
+        )
+        else -> SettingsScreen(
+            onBack = { screen = 1 },
+            onGrantStorage = { openAiFolder(context) }
         )
     }
 }
@@ -117,6 +126,7 @@ fun VdubRoot() {
 fun Step2Screen(
     project: String,
     onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
     vm: Step2ViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -149,10 +159,16 @@ fun Step2Screen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back to Step 1")
                     }
                 },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         }
@@ -214,6 +230,7 @@ fun Step2Screen(
 @Composable
 fun Step1Screen(
     onProjectChanged: (String) -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onNext: (String) -> Unit = {},vm: Step1ViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -293,6 +310,9 @@ fun Step1Screen(
                     }
                     IconButton(onClick = { openAiFolder(context) }) {
                         Icon(Icons.Default.FolderOpen, contentDescription = "Storage access")
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings · Models")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

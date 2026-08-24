@@ -83,7 +83,7 @@ fun ModelStatusCard(
                     "%.1f MB · %s".format(sizeBytes / 1024.0 / 1024.0, path)
                 } else {
                     "The 28 MB CAM++ model is needed to tell voices apart. " +
-                        "Tap below to fetch it straight to your phone."
+                        "Download it in Settings — no PC needed."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

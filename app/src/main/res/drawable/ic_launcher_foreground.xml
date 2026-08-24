@@ -1,8 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  vdub launcher icon: clapperboard + waveform.
+  Adaptive-icon foreground. The 108dp canvas has a 72dp safe zone centred at
+  54,54 — art stays inside it so no launcher mask clips the clapper.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#7C5CFF"
-        android:pathData="M30,38h48a4,4 0,0 1,4 4v24a4,4 0,0 1,-4 4h-48a4,4 0,0 1,-4 -4v-24a4,4 0,0 1,4 -4z"/>
-    <path android:fillColor="#FFFFFF"
-        android:pathData="M48,46l18,8l-18,8z"/>
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- clapper top bar, angled -->
+    <group android:pivotX="54" android:pivotY="54">
+        <path
+            android:fillColor="#7C5CFF"
+            android:pathData="M27.5,40.6 L76.5,29.2 A3,3 0 0,1 80.1,31.5 L82.2,40.6 A3,3 0 0,1 79.9,44.2 L30.9,55.6 A3,3 0 0,1 27.3,53.3 L25.2,44.2 A3,3 0 0,1 27.5,40.6 Z" />
+        <!-- stripes on the top bar -->
+        <path
+            android:fillColor="#12131A"
+            android:pathData="M38.6,39.9 L45.4,38.3 L49.3,46.5 L42.5,48.1 Z" />
+        <path
+            android:fillColor="#12131A"
+            android:pathData="M53.9,36.3 L60.7,34.7 L64.6,42.9 L57.8,44.5 Z" />
+        <path
+            android:fillColor="#12131A"
+            android:pathData="M69.2,32.7 L76.0,31.1 L79.9,39.3 L73.1,40.9 Z" />
+    </group>
+
+    <!-- board body -->
+    <path
+        android:fillColor="#7C5CFF"
+        android:pathData="M28,50 L80,50 A4,4 0 0,1 84,54 L84,78 A4,4 0 0,1 80,82 L28,82 A4,4 0 0,1 24,78 L24,54 A4,4 0 0,1 28,50 Z" />
+
+    <!-- waveform: quiet -> loud -> quiet, mirrored about the centre line -->
+    <group>
+        <path android:fillColor="#FFFFFF" android:pathData="M30,64 h2.6 v4 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M35,61.5 h2.6 v9 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M40,58.5 h2.6 v15 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M45,62.5 h2.6 v7 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M50,56 h2.6 v20 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M55,59.5 h2.6 v13 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M60,62.5 h2.6 v7 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M65,58.5 h2.6 v15 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M70,61.5 h2.6 v9 h-2.6 z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M75,64 h2.6 v4 h-2.6 z" />
+    </group>
 </vector>

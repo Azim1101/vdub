@@ -33,7 +33,7 @@ class SpeakerEmbedder private constructor(
     companion object {
         const val EMBED_DIM = 192
 
-        const val MODEL_NAME = "campplus.onnx"
+        const val MODEL_NAME = "campplus.onnx"   // ModelCatalog.CAMPPLUS
 
         /** Looks in both the shared /AI/models and the app-private fallback. */
         fun modelFile(): File =
@@ -50,8 +50,7 @@ class SpeakerEmbedder private constructor(
             val file = modelFile()
             check(file.exists()) {
                 "campplus.onnx not found.\n" +
-                    "Put the 28 MB model in:\n${VdubPaths.modelsDir.absolutePath}\n\n" +
-                    "adb push campplus.onnx ${VdubPaths.modelsDir.absolutePath}/"
+                    "Open Settings and download it — no PC needed."
             }
             check(file.length() > 1_000_000) {
                 "campplus.onnx looks truncated (${file.length()} bytes) — re-copy it."

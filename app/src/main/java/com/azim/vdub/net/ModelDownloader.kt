@@ -1,5 +1,6 @@
 package com.azim.vdub.net
 
+import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.core.VdubPaths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -14,122 +15,129 @@ import javax.inject.Singleton
 import kotlin.coroutines.coroutineContext
 
 /**
- * Downloads the ONNX models into /AI/models straight from the app.
+ * Fetches models from the catalog into /AI/models.
  *
- * `adb push` assumes a PC and a cable; the phone can fetch these itself.
- * Downloads are Range-resumable and validated, because a truncated or
- * HTML-error-page "model" fails much later inside ONNX Runtime with a
- * meaningless error.
+ * Downloads are Range-resumable and validated before install: an HTML error
+ * page saved as .onnx and a truncated transfer both otherwise fail much later
+ * inside ONNX Runtime with an error that says nothing useful.
  */
 @Singleton
 class ModelDownloader @Inject constructor() {
 
-    data class ModelSpec(
-        val fileName: String,
-        val label: String,
-        val approxBytes: Long,
-        /** Tried in order; first reachable one wins. */
-        val urls: List<String>,
-        val note: String = ""
-    )
-
-    companion object {
-        /**
-         * CAM++ speaker embedding, 3D-Speaker, 192-dim, 80-dim fbank input.
-         * Exactly the 28 MB checkpoint the pipeline expects.
-         */
-        val CAMPPLUS = ModelSpec(
-            fileName = "campplus.onnx",
-            label = "campplus (speaker embedding)",
-            approxBytes = 28_283_928L,
-            urls = listOf(
-                "https://huggingface.co/welcomyou/campplus-3dspeaker-200k-onnx/resolve/main/campplus_cn_en_common_200k.onnx?download=true",
-                // hf-mirror is the usual fallback when huggingface.co is slow/blocked
-                "https://hf-mirror.com/welcomyou/campplus-3dspeaker-200k-onnx/resolve/main/campplus_cn_en_common_200k.onnx?download=true",
-                "https://huggingface.co/Luigi/campplus-zh-en-onnx/resolve/main/campplus_zh_en_fp32.onnx?download=true",
-                "https://hf-mirror.com/Luigi/campplus-zh-en-onnx/resolve/main/campplus_zh_en_fp32.onnx?download=true"
-            ),
-            note = "CAM++ zh+en, 192-dim embeddings"
-        )
-
-        val ALL = listOf(CAMPPLUS)
-    }
-
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.MINUTES)
+        .readTimeout(10, TimeUnit.MINUTES)
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
         .build()
 
-    sealed interface Progress {
-        data class Downloading(
-            val bytes: Long,
-            val total: Long,
-            val mirror: Int,
-            val mirrorCount: Int
-        ) : Progress
-        data class Verifying(val bytes: Long) : Progress
+    data class Progress(
+        val fileIndex: Int,
+        val fileCount: Int,
+        val fileName: String,
+        val bytes: Long,
+        val total: Long,
+        val mirror: Int,
+        val verifying: Boolean = false
+    ) {
+        /** Overall fraction across all files of the model. */
+        val fraction: Float
+            get() {
+                if (fileCount <= 0) return -1f
+                val within = if (total > 0) bytes.toFloat() / total else 0f
+                return ((fileIndex + within) / fileCount).coerceIn(0f, 1f)
+            }
     }
 
-    /**
-     * Fetch [spec] into /AI/models, trying each mirror in turn.
-     * @return the installed file.
-     */
+    /** True when every file of [model] is present and plausible. */
+    fun isInstalled(model: ModelCatalog.Model): Boolean =
+        model.files.all { f ->
+            val file = File(VdubPaths.modelsDir, f.localName)
+            file.exists() && file.length() >= (f.approxBytes * 0.5).toLong().coerceAtLeast(64L)
+        }
+
+    fun installedBytes(model: ModelCatalog.Model): Long =
+        model.files.sumOf { File(VdubPaths.modelsDir, it.localName).length() }
+
+    fun modelFile(name: String): File = File(VdubPaths.modelsDir, name)
+
+    /** Remove a model's files to reclaim space. */
+    fun delete(model: ModelCatalog.Model) {
+        model.files.forEach { File(VdubPaths.modelsDir, it.localName).delete() }
+    }
+
     suspend fun download(
-        spec: ModelSpec,
+        model: ModelCatalog.Model,
         onProgress: (Progress) -> Unit = {}
-    ): File = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) {
         val dir = VdubPaths.modelsDir
         dir.mkdirs()
         check(dir.isDirectory) {
-            "Cannot create ${dir.absolutePath} — grant All-files access or the " +
-                "app will use its private folder."
+            "Cannot create ${dir.absolutePath} — grant All-files access, or the " +
+                "app will keep using its private folder."
         }
 
-        val target = File(dir, spec.fileName)
-        val partial = File(dir, spec.fileName + ".part")
-        val failures = StringBuilder()
-
-        spec.urls.forEachIndexed { index, url ->
+        model.files.forEachIndexed { index, spec ->
             coroutineContext.ensureActive()
-            try {
-                fetch(url, partial, spec, index, spec.urls.size, onProgress)
-                onProgress(Progress.Verifying(partial.length()))
-                validate(partial, spec)
-                if (target.exists()) target.delete()
-                check(partial.renameTo(target)) { "could not move into place" }
-                return@withContext target
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failures.append("\n• mirror ${index + 1}: ${e.message}")
-                // A corrupt partial must not poison the next mirror.
-                partial.delete()
-            }
-        }
+            val target = File(dir, spec.localName)
+            target.parentFile?.mkdirs()
 
-        error("Could not download ${spec.label}.$failures")
+            // Skip files already installed, so a retry resumes at the model level.
+            if (target.exists() &&
+                target.length() >= (spec.approxBytes * 0.5).toLong().coerceAtLeast(64L)
+            ) {
+                onProgress(
+                    Progress(index, model.files.size, spec.localName,
+                        target.length(), target.length(), 0)
+                )
+                return@forEachIndexed
+            }
+
+            val partial = File(dir, spec.localName + ".part")
+            val failures = StringBuilder()
+            var installed = false
+
+            for ((mirror, url) in spec.urls.withIndex()) {
+                coroutineContext.ensureActive()
+                try {
+                    fetch(url, partial, spec, index, model.files.size, mirror, onProgress)
+                    onProgress(
+                        Progress(index, model.files.size, spec.localName,
+                            partial.length(), partial.length(), mirror, verifying = true)
+                    )
+                    validate(partial, spec)
+                    if (target.exists()) target.delete()
+                    check(partial.renameTo(target)) { "could not move into place" }
+                    installed = true
+                    break
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failures.append("\n• mirror ${mirror + 1}: ${e.message}")
+                    partial.delete()   // never resume into a corrupt partial
+                }
+            }
+
+            check(installed) { "Could not download ${spec.localName}.$failures" }
+        }
     }
 
     private suspend fun fetch(
         url: String,
         partial: File,
-        spec: ModelSpec,
+        spec: ModelCatalog.ModelFile,
+        fileIndex: Int,
+        fileCount: Int,
         mirror: Int,
-        mirrorCount: Int,
         onProgress: (Progress) -> Unit
     ) {
         val already = if (partial.exists()) partial.length() else 0L
-        val builder = Request.Builder()
-            .url(url)
-            .header("User-Agent", "vdub-android")
+        val builder = Request.Builder().url(url).header("User-Agent", "vdub-android")
         if (already > 0) builder.header("Range", "bytes=$already-")
 
         client.newCall(builder.build()).execute().use { resp ->
             if (!resp.isSuccessful) error("HTTP ${resp.code}")
-
             val resuming = resp.code == 206 && already > 0
             val bodyLen = resp.body?.contentLength() ?: -1L
             val total = when {
@@ -154,38 +162,44 @@ class ModelDownloader @Inject constructor() {
                     val now = System.currentTimeMillis()
                     if (now - lastTick > 150) {
                         lastTick = now
-                        onProgress(Progress.Downloading(written, total, mirror, mirrorCount))
+                        onProgress(
+                            Progress(fileIndex, fileCount, spec.localName,
+                                written, total, mirror)
+                        )
                     }
                 }
-                onProgress(Progress.Downloading(written, total, mirror, mirrorCount))
+                onProgress(
+                    Progress(fileIndex, fileCount, spec.localName, written, total, mirror)
+                )
             }
         }
     }
 
-    /**
-     * Reject the two failure modes that otherwise surface as an unreadable
-     * ONNX Runtime error much later: an HTML error page saved as .onnx, and a
-     * truncated transfer.
-     */
-    private fun validate(file: File, spec: ModelSpec) {
+    private fun validate(file: File, spec: ModelCatalog.ModelFile) {
         val size = file.length()
-        if (size < 1_000_000) {
-            val head = file.inputStream().use { String(it.readNBytes(200)) }.trim()
-            if (head.startsWith("<") || head.contains("html", ignoreCase = true)) {
-                error("server returned a web page, not the model")
-            }
-            error("file is only $size bytes — download was cut short")
+        if (size == 0L) error("empty file")
+
+        val head = file.inputStream().use { it.readNBytes(256) }
+        val asText = String(head).trim()
+
+        if (asText.startsWith("<") || asText.startsWith("<!DOCTYPE", true)) {
+            error("server returned a web page, not the file")
         }
-        if (spec.approxBytes > 0) {
-            val ratio = size.toDouble() / spec.approxBytes
-            if (ratio < 0.5) error("only ${pct(ratio)} of the expected size arrived")
+        if (spec.approxBytes > 0 && size < spec.approxBytes * 0.5) {
+            error("only ${size / 1024} KB of ~${spec.approxBytes / 1024} KB arrived")
         }
-        // ONNX is protobuf: field 1 (ir_version) varint -> first byte 0x08.
-        val magic = file.inputStream().use { it.readNBytes(1) }
-        if (magic.isEmpty() || magic[0] != 0x08.toByte()) {
-            error("not a valid ONNX file (bad header)")
+        when (spec.kind) {
+            // ONNX is protobuf: field 1 (ir_version) varint -> first byte 0x08.
+            ModelCatalog.Kind.ONNX ->
+                if (head.isEmpty() || head[0] != 0x08.toByte()) {
+                    error("not a valid ONNX file (bad header)")
+                }
+            ModelCatalog.Kind.JSON ->
+                if (!asText.startsWith("{") && !asText.startsWith("[")) {
+                    error("not valid JSON")
+                }
+            ModelCatalog.Kind.TEXT, ModelCatalog.Kind.BIN,
+            ModelCatalog.Kind.ONNX_DATA -> Unit
         }
     }
-
-    private fun pct(r: Double) = "%.0f%%".format(r * 100)
 }
