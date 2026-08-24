@@ -63,8 +63,10 @@ jobs:
               echo "Gradle failed on \`${GITHUB_SHA:0:7}\`"
               echo
               echo '```'
-              grep -E "^e: |error:|FAILURE|What went wrong|^\s+> " /tmp/build.log \
-                | head -80 || tail -80 /tmp/build.log
+              grep -E "^e: |error:|Caused by|Execution failed|FAILURE|What went wrong|^\s+> |Test.*FAILED|tests? (completed|failed)" \
+                /tmp/build.log | head -60 || true
+              echo "--- tail ---"
+              tail -120 /tmp/build.log
               echo '```'
             } > /tmp/comment.md
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
