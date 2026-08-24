@@ -237,12 +237,43 @@ exactly *k* is more robust than any threshold.
 Embeddings cache to `speaker_embeds.bin`, so re-tuning is instant rather than
 190 fresh inferences.
 
+## Everything runs on the phone — no server
+
+The "models add up to 4 GB, a 6 GB phone cannot do it" reasoning sums the
+models. But the pipeline is **sequential**: diarization finishes before emotion
+starts, which finishes before translation starts. Each stage closes its ONNX
+session before the next opens, so only one model is resident at a time.
+
+| | |
+|---|---|
+| Disk, if you download everything | ~1.6 GB |
+| **Peak RAM** | **~600 MB** (largest single model) |
+
+That is why nothing needs to be offloaded. A unit test pins the invariant.
+
+## Settings → Models
+
+One screen to manage every model, grouped by pipeline step. Download, resume,
+cancel, re-download, remove — with size, licence and purpose shown, plus disk
+used and free.
+
+| Model | Size | Step | Required |
+|---|---|---|---|
+| CAM++ speaker embedding | 28 MB | Speakers | yes |
+| SenseVoice ASR | 249 MB | Transcribe | no — only if you have no SRT |
+| emotion2vec+ base | 373 MB | Emotion | yes |
+| NLLB-200 distilled 600M | 620 MB | Translate | yes · CC-BY-NC |
+| Kokoro-82M TTS (Hindi voices) | 92 MB | Voice | yes |
+
+Every file has two mirrors (huggingface.co and hf-mirror.com), transfers resume,
+and downloads are validated before install.
+
 ## Roadmap
 
-| Step | Feature | Model |
+| Step | Feature | Status |
 |---|---|---|
-| ✅ 1 | Upload + player + trim | — |
-| ✅ 2 | Speaker diarization | campplus 28 MB ONNX |
-| 3 | Emotion | emotion2vec_plus_base 355 MB |
-| 4 | Translation | NLLB q8 0.9 GB (server) |
-| 5 | TTS | Chatterbox 1.73 GB (server) |
+| 1 | Upload + player + trim | ✅ done |
+| 2 | Speaker diarization | ✅ done |
+| 3 | Emotion | model wired, stage next |
+| 4 | Translation | model wired, stage next |
+| 5 | TTS + mux | model wired, stage next |
