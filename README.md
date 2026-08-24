@@ -191,11 +191,19 @@ writes `/storage/emulated/0/AI/` directly.
 
 Tags every clip with a speaker, writes `out/script_speakers.json` + `S02.done`.
 
-**Put the model here first:**
+**Getting the model:** tap **Download model (28 MB)** in the app — no PC or adb
+needed. It pulls the 3D-Speaker CAM++ ONNX export, trying four mirrors
+(huggingface.co and hf-mirror.com), resumes if the connection drops, and
+validates the file before installing it.
+
+Manual placement still works if you already have it:
 ```bash
 adb push campplus.onnx /storage/emulated/0/AI/models/
 ```
-It must be a real **ONNX export** — a FunASR `.bin`/`.pt` checkpoint will not load.
+It must be a real **ONNX export** — a FunASR `.bin`/`.pt` checkpoint will not
+load. The app checks the size and protobuf header up front, so a half-downloaded
+file or an HTML error page is caught immediately instead of failing later inside
+ONNX Runtime.
 
 ### Two corrections to the original plan
 
