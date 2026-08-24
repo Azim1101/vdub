@@ -185,12 +185,54 @@ writes `/storage/emulated/0/AI/` directly.
 
 ---
 
+## Step 2 — Speaker Diarization
+
+Tags every clip with a speaker, writes `out/script_speakers.json` + `S02.done`.
+
+**Put the model here first:**
+```bash
+adb push campplus.onnx /storage/emulated/0/AI/models/
+```
+It must be a real **ONNX export** — a FunASR `.bin`/`.pt` checkpoint will not load.
+
+### Two corrections to the original plan
+
+**1. campplus does not take a waveform.** Its graph starts *after* feature
+extraction, so the input is `(batch, frames, 80)` kaldi fbank with CMN applied.
+`Fbank.kt` implements it: 25 ms window, 10 ms shift, Povey window, HTK mel,
+radix-2 FFT. Verified against a naive DFT (max error 4e-12), kaldi frame counts
+(1 s → 98 frames), and tone-to-bin placement.
+
+**2. The threshold direction was inverted.** Raising 0.55 → 0.75 gives *more*
+speakers, not fewer. The pairwise `if sim > thr: same speaker` merge is
+**single-linkage**, which chains — one ambiguous clip bridges two speakers, and
+lowering the threshold to stop that shatters them into singletons. That is how
+3 speakers became 29.
+
+This uses **average linkage**, comparing cluster means, so the threshold is the
+*stopping* similarity:
+
+| Threshold | Effect |
+|---|---|
+| Lower (0.20–0.45) | merges more → **fewer** speakers |
+| Higher (0.70+) | stops sooner → **more** speakers |
+
+On simulated 190-clip data with campplus-like statistics, 0.20–0.60 all recover
+exactly 120/50/20 at 100% purity; 0.70 fragments into 28 — close to the 29
+originally observed. A unit test pins this direction.
+
+**Since you usually know the count, use "I know the count" mode** — clustering to
+exactly *k* is more robust than any threshold.
+
+Embeddings cache to `speaker_embeds.bin`, so re-tuning is instant rather than
+190 fresh inferences.
+
 ## Roadmap
 
 | Step | Feature | Model |
 |---|---|---|
 | ✅ 1 | Upload + player + trim | — |
-| 2 | Speaker diarization | campplus 28 MB ONNX |
+| ✅ 2 | Speaker diarization | campplus 28 MB ONNX |
 | 3 | Emotion | emotion2vec_plus_base 355 MB |
 | 4 | Translation | NLLB q8 0.9 GB (server) |
 | 5 | TTS | Chatterbox 1.73 GB (server) |
