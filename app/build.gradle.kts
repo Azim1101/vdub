@@ -24,12 +24,6 @@ android {
             // ALU / on-device models are arm64 only
             abiFilters += listOf("arm64-v8a")
         }
-
-        // Default yt-dlp download server (Kaggle / colab tunnel). Override in local.properties
-        // via VDUB_SERVER=https://xxxx.trycloudflare.com
-        val serverUrl: String = (project.findProperty("VDUB_SERVER") as String?)
-            ?: "http://10.0.2.2:8000"
-        buildConfigField("String", "DOWNLOAD_SERVER", "\"$serverUrl\"")
     }
 
     buildTypes {

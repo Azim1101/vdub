@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +60,7 @@ import com.azim.vdub.ui.ModelStatusCard
 import com.azim.vdub.ui.NextStep3Button
 import com.azim.vdub.ui.NextStepButton
 import com.azim.vdub.ui.SpeakerSection
+import com.azim.vdub.ui.StorageWarningCard
 import com.azim.vdub.ui.Step2ViewModel
 import com.azim.vdub.ui.SectionCard
 import com.azim.vdub.ui.StepBadge
@@ -235,6 +237,16 @@ fun Step1Screen(
     }
     LaunchedEffect(state.projectName) { onProjectChanged(state.projectName) }
 
+    // Re-check All-files access when the user comes back from Settings.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.loadProject()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
     // ---- pickers ----
     val videoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -289,6 +301,13 @@ fun Step1Screen(
             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item {
+                StorageWarningCard(
+                    shared = state.storageShared,
+                    path = state.storagePath,
+                    onGrant = { openAiFolder(context) }
+                )
+            }
             // ---------- player ----------
             item {
                 VideoPlayer(videoPath = state.videoPath, heightDp = 220)
@@ -347,8 +366,6 @@ fun Step1Screen(
                 VideoUploadSection(
                     hasVideo = state.hasVideo,
                     url = state.sourceUrl,
-                    serverBase = state.serverBase.ifBlank { BuildConfig.DOWNLOAD_SERVER },
-                    serverOnline = state.serverOnline,
                     busy = state.busy,
                     onPickGallery = { videoPicker.launch(arrayOf("video/*")) },
                     onPickDrive = {
@@ -361,8 +378,6 @@ fun Step1Screen(
                             ?.let(vm::setSourceUrl)
                     },
                     onUrlChange = vm::setSourceUrl,
-                    onServerChange = vm::setServerBase,
-                    onPingServer = vm::pingServer,
                     onDownload = vm::downloadVideo
                 )
             }

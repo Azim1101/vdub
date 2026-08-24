@@ -167,15 +167,11 @@ private fun ActionChip(
 fun VideoUploadSection(
     hasVideo: Boolean,
     url: String,
-    serverBase: String,
-    serverOnline: Boolean?,
     busy: Boolean,
     onPickGallery: () -> Unit,
     onPickDrive: () -> Unit,
     onPasteUrl: () -> Unit,
     onUrlChange: (String) -> Unit,
-    onServerChange: (String) -> Unit,
-    onPingServer: () -> Unit,
     onDownload: () -> Unit
 ) {
     SectionCard(
@@ -213,45 +209,56 @@ fun VideoUploadSection(
             enabled = !busy
         )
 
-        Spacer(Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = serverBase,
-            onValueChange = onServerChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("yt-dlp server (PhantomJS box)") },
-            placeholder = { Text("https://xxxx.trycloudflare.com") },
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp),
-            enabled = !busy,
-            supportingText = {
-                Text(
-                    when (serverOnline) {
-                        true -> "Server online ✓"
-                        false -> "Server unreachable — check the tunnel URL"
-                        null -> "Needed for iq.com / DRM-free stream sites"
-                    },
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Works with direct .mp4/.m3u8 links and pages that expose their " +
+                "video. DRM sites (iQIYI, YouTube, Netflix) cannot be fetched " +
+                "from a phone — download on a PC and use Gallery.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         Spacer(Modifier.height(8.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = onPingServer,
-                enabled = !busy,
-                modifier = Modifier.height(44.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) { Text("Test") }
-            ActionChip(
-                Icons.Default.CloudDownload, "Download",
-                Modifier.weight(1f),
-                enabled = !busy && url.isNotBlank(),
-                primary = true,
-                onClick = onDownload
+        ActionChip(
+            Icons.Default.CloudDownload, "Download",
+            Modifier.fillMaxWidth(),
+            enabled = !busy && url.isNotBlank(),
+            primary = true,
+            onClick = onDownload
+        )
+    }
+}
+
+/** Shown when All-files access is missing and we fell back to private storage. */
+@Composable
+fun StorageWarningCard(shared: Boolean, path: String, onGrant: () -> Unit) {
+    if (shared) return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                "Using app-private storage",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.tertiary
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Files go to:\n$path\n\nEverything works, but other apps and " +
+                    "adb push cannot reach /storage/emulated/0/AI. Grant " +
+                    "All-files access to use the shared folder.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onGrant,
+                modifier = Modifier.height(42.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("Grant All-files access") }
         }
     }
 }

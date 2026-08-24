@@ -26,8 +26,8 @@ data class Step1UiState(
     val durationMs: Long = 0L,
     val videoSizeBytes: Long = 0L,
     val sourceUrl: String = "",
-    val serverBase: String = "",
-    val serverOnline: Boolean? = null,
+    val storageShared: Boolean = true,
+    val storagePath: String = "",
     val srtPath: String? = null,
     val translatedSrtPath: String? = null,
     val cueCount: Int = 0,
@@ -62,7 +62,13 @@ class Step1ViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             VdubPaths.ensureRoots()
-            _state.update { it.copy(knownProjects = VdubPaths.listProjects()) }
+            _state.update {
+                it.copy(
+                    knownProjects = VdubPaths.listProjects(),
+                    storageShared = VdubPaths.usingSharedStorage,
+                    storagePath = VdubPaths.projectsRoot.absolutePath
+                )
+            }
             loadProject(_state.value.projectName)
         }
     }
@@ -83,6 +89,8 @@ class Step1ViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     projectName = name,
+                    storageShared = VdubPaths.usingSharedStorage,
+                    storagePath = VdubPaths.projectDir(name).absolutePath,
                     knownProjects = VdubPaths.listProjects(),
                     videoPath = entity.videoPath,
                     videoSource = runCatching { VideoSource.valueOf(entity.videoSource) }
@@ -110,13 +118,8 @@ class Step1ViewModel @Inject constructor(
     }
 
     fun setSourceUrl(url: String) = _state.update { it.copy(sourceUrl = url) }
-    fun setServerBase(base: String) = _state.update { it.copy(serverBase = base) }
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
-    fun pingServer() = viewModelScope.launch {
-        val ok = repo.pingServer(_state.value.serverBase.ifBlank { null })
-        _state.update { it.copy(serverOnline = ok) }
-    }
 
     fun cancel() {
         runningJob?.cancel()
@@ -144,7 +147,6 @@ class Step1ViewModel @Inject constructor(
         val file = repo.downloadVideoFromUrl(
             project = s.projectName,
             url = s.sourceUrl.trim(),
-            serverBase = s.serverBase.ifBlank { null }
         ) { got, total ->
             progress(
                 "Downloading video",

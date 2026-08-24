@@ -8,6 +8,7 @@ import dagger.hilt.android.HiltAndroidApp
 class VdubApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        VdubPaths.init(this)
         runCatching { VdubPaths.ensureRoots() }
     }
 }

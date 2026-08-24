@@ -33,10 +33,14 @@ class SpeakerEmbedder private constructor(
     companion object {
         const val EMBED_DIM = 192
 
-        /** Where the user is expected to push the 28 MB model. */
-        fun modelFile(): File = File(VdubPaths.modelsDir, "campplus.onnx")
+        const val MODEL_NAME = "campplus.onnx"
 
-        fun isModelPresent(): Boolean = modelFile().let { it.exists() && it.length() > 1_000_000 }
+        /** Looks in both the shared /AI/models and the app-private fallback. */
+        fun modelFile(): File =
+            VdubPaths.findModel(MODEL_NAME) ?: File(VdubPaths.modelsDir, MODEL_NAME)
+
+        fun isModelPresent(): Boolean =
+            modelFile().let { it.exists() && it.length() > 1_000_000 }
 
         /**
          * @throws IllegalStateException with an actionable message when the
@@ -46,8 +50,8 @@ class SpeakerEmbedder private constructor(
             val file = modelFile()
             check(file.exists()) {
                 "campplus.onnx not found.\n" +
-                    "Push the 28 MB model to:\n${file.absolutePath}\n\n" +
-                    "adb push campplus.onnx /storage/emulated/0/AI/models/"
+                    "Put the 28 MB model in:\n${VdubPaths.modelsDir.absolutePath}\n\n" +
+                    "adb push campplus.onnx ${VdubPaths.modelsDir.absolutePath}/"
             }
             check(file.length() > 1_000_000) {
                 "campplus.onnx looks truncated (${file.length()} bytes) — re-copy it."

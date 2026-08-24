@@ -1,5 +1,7 @@
 package com.azim.vdub.core
 
+import android.content.Context
+import android.os.Build
 import android.os.Environment
 import java.io.File
 
@@ -17,15 +19,72 @@ import java.io.File
  *     ├── clips/line_0000.wav  ... 190 clips
  *     ├── out/script_raw.json
  *     └── S01.done             step marker (resume-safe)
+ *
+ * ## Storage fallback
+ *
+ * Writing to /storage/emulated/0/AI needs All-files access (MANAGE_EXTERNAL_
+ * STORAGE), which the user must grant by hand in Settings. Until they do,
+ * every write there fails with EPERM. Rather than dead-ending, the app falls
+ * back to its own external directory, which needs no permission at all:
+ *
+ *   /Android/data/com.azim.vdub/files/AI/
+ *
+ * Everything works there; the only cost is that other apps (and adb push
+ * without the full path) cannot see it. [usingSharedStorage] tells the UI
+ * which root is live so it can offer the upgrade.
  */
 object VdubPaths {
 
-    private val sdRoot: File get() = Environment.getExternalStorageDirectory()
+    /** Set once from the Application so a Context is always available. */
+    @Volatile
+    private var fallbackRoot: File? = null
 
-    val aiRoot: File get() = File(sdRoot, "AI")
+    fun init(context: Context) {
+        fallbackRoot = File(context.getExternalFilesDir(null), "AI")
+    }
+
+    /** True when we can use the shared /storage/emulated/0/AI folder. */
+    fun hasAllFilesAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            // Pre-R the legacy WRITE_EXTERNAL_STORAGE grant covers it.
+            Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED
+        }
+
+    private val sharedRoot: File get() = File(Environment.getExternalStorageDirectory(), "AI")
+
+    val usingSharedStorage: Boolean get() = hasAllFilesAccess() || fallbackRoot == null
+
+    /**
+     * Active root. Prefers the shared /AI folder, but only when we can
+     * actually write there — otherwise the app-private fallback.
+     */
+    val aiRoot: File
+        get() {
+            if (hasAllFilesAccess()) return sharedRoot
+            return fallbackRoot ?: sharedRoot
+        }
+
+    /** The shared path, for display even when it is not currently usable. */
+    val sharedRootPath: String get() = sharedRoot.absolutePath
+
     val libsDir: File get() = File(aiRoot, "libs/arm64-v8a")
     val modelsDir: File get() = File(aiRoot, "models")
     val projectsRoot: File get() = File(aiRoot, "vdub_projects")
+
+    /**
+     * Models may sit in either root — a user who ran `adb push` before
+     * granting access would otherwise appear to have no model.
+     */
+    fun findModel(name: String): File? {
+        val candidates = listOfNotNull(
+            File(modelsDir, name),
+            File(File(sharedRoot, "models"), name),
+            fallbackRoot?.let { File(File(it, "models"), name) }
+        )
+        return candidates.firstOrNull { it.exists() && it.length() > 1_000 }
+    }
 
     fun projectDir(project: String): File = File(projectsRoot, project.sanitized())
 
@@ -60,13 +119,38 @@ object VdubPaths {
         stepMarker(project, step).delete()
     }
 
+    /**
+     * Create the project tree and prove it is writable.
+     * @throws IllegalStateException with an actionable message, instead of
+     *         letting a raw EPERM surface later from deep inside a copy.
+     */
     fun ensureProject(project: String) {
-        listOf(projectDir(project), subsDir(project), clipsDir(project), outDir(project))
+        val dir = projectDir(project)
+        listOf(dir, subsDir(project), clipsDir(project), outDir(project))
             .forEach { it.mkdirs() }
+
+        if (!dir.isDirectory) {
+            error(
+                "Cannot create ${dir.absolutePath}\n\n" +
+                    "Grant \"All files access\" (folder icon, top right), " +
+                    "or the app will use its private folder instead."
+            )
+        }
+        val probe = File(dir, ".write_test")
+        try {
+            probe.writeText("ok")
+            probe.delete()
+        } catch (e: Exception) {
+            error(
+                "Storage is not writable:\n${dir.absolutePath}\n\n" +
+                    "Tap the folder icon (top right) and enable " +
+                    "\"All files access\", then press Open / Resume."
+            )
+        }
     }
 
     fun ensureRoots() {
-        listOf(aiRoot, libsDir, modelsDir, projectsRoot).forEach { it.mkdirs() }
+        runCatching { listOf(aiRoot, libsDir, modelsDir, projectsRoot).forEach { it.mkdirs() } }
     }
 
     fun listProjects(): List<String> =

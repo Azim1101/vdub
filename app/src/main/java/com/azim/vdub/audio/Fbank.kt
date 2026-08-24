@@ -1,12 +1,9 @@
 package com.azim.vdub.audio
 
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
-import kotlin.math.log
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
  * Kaldi-compatible 80-dim log-Mel filterbank.

@@ -1,16 +1,10 @@
 package com.azim.vdub.net
 
-import com.azim.vdub.BuildConfig
-import com.azim.vdub.data.model.DownloadRequest
-import com.azim.vdub.data.model.DownloadResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -18,68 +12,23 @@ import javax.inject.Singleton
 import kotlin.coroutines.coroutineContext
 
 /**
- * Video acquisition over the network.
+ * Streams a media URL to disk.
  *
- * URL downloads are delegated to a helper server (Kaggle/Colab box) rather than
- * being done on-device: sites like iq.com need yt-dlp + a PhantomJS binary and
- * OPENSSL_CONF=/dev/null, none of which can run inside an APK.
- *
- * Server contract:
- *   POST {server}/download  {"url":..., "format":"500", "project":...}
- *     -> {"ok":true, "file_url":"/files/xxx.mp4", "size_bytes":149000000}
- *   GET  {file_url}         -> the mp4 bytes (Range-resumable)
+ * Resolving a *page* into a media URL is [VideoResolver]'s job; this class
+ * only moves bytes. Transfers are Range-resumable via a .part file, so a
+ * dropped connection continues instead of restarting a 142 MB download.
  */
 @Singleton
 class DownloadClient @Inject constructor() {
 
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
-
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.MINUTES)   // yt-dlp on a 142 MB file takes a while
+        .readTimeout(30, TimeUnit.MINUTES)   // large files
         .writeTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
-    var serverBase: String = BuildConfig.DOWNLOAD_SERVER
-
-    /** Ask the server to resolve+fetch the URL, then stream the mp4 down. */
-    suspend fun downloadFromUrl(
-        pageUrl: String,
-        project: String,
-        target: File,
-        format: String = "500",
-        onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> }
-    ): File = withContext(Dispatchers.IO) {
-        val base = serverBase.trimEnd('/')
-        val payload = json.encodeToString(
-            DownloadRequest.serializer(),
-            DownloadRequest(url = pageUrl, format = format, project = project)
-        )
-        val req = Request.Builder()
-            .url("$base/download")
-            .post(payload.toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val meta: DownloadResponse = client.newCall(req).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                error("Server ${resp.code}: ${body.take(300)}")
-            }
-            json.decodeFromString(DownloadResponse.serializer(), body)
-        }
-        if (!meta.ok || meta.fileUrl.isNullOrBlank()) {
-            error(meta.error ?: "Server returned no file")
-        }
-
-        val fileUrl = if (meta.fileUrl.startsWith("http")) meta.fileUrl
-        else "$base/${meta.fileUrl.trimStart('/')}"
-
-        streamTo(fileUrl, target, meta.sizeBytes ?: -1L, onProgress)
-        target
-    }
-
-    /** Straight HTTP(S) GET — direct mp4 links and Drive `uc?export=download`. */
+    /** Stream a resolved media URL to [target]. */
     suspend fun downloadDirect(
         fileUrl: String,
         target: File,
@@ -139,11 +88,4 @@ class DownloadClient @Inject constructor() {
         check(partial.renameTo(target)) { "Could not finalize ${target.name}" }
     }
 
-    /** Quick reachability probe so the UI can show server status. */
-    suspend fun ping(): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            val req = Request.Builder().url("${serverBase.trimEnd('/')}/health").get().build()
-            client.newCall(req).execute().use { it.isSuccessful }
-        }.getOrDefault(false)
-    }
 }

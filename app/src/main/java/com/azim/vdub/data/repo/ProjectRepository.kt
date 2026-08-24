@@ -20,6 +20,7 @@ import com.azim.vdub.data.model.SpeakerScript
 import com.azim.vdub.data.model.SrtCue
 import com.azim.vdub.data.model.VideoSource
 import com.azim.vdub.net.DownloadClient
+import com.azim.vdub.net.VideoResolver
 import com.azim.vdub.subtitle.SrtParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +38,8 @@ class ProjectRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val projectDao: ProjectDao,
     private val clipDao: ClipDao,
-    private val downloadClient: DownloadClient
+    private val downloadClient: DownloadClient,
+    private val videoResolver: VideoResolver
 ) {
     private val json = Json {
         prettyPrint = true
@@ -97,21 +99,27 @@ class ProjectRepository @Inject constructor(
         target
     }
 
+    /**
+     * Resolve a page/URL to a media link on-device, then stream it down.
+     * Throws a human-readable message for sites that need a JS engine or DRM.
+     */
     suspend fun downloadVideoFromUrl(
         project: String,
         url: String,
-        serverBase: String?,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): File = withContext(Dispatchers.IO) {
         VdubPaths.ensureProject(project)
         val target = VdubPaths.inputVideo(project)
-        if (!serverBase.isNullOrBlank()) downloadClient.serverBase = serverBase
 
-        val direct = url.substringBefore('?').endsWith(".mp4", ignoreCase = true)
-        if (direct) {
-            downloadClient.downloadDirect(url, target, onProgress)
-        } else {
-            downloadClient.downloadFromUrl(url, project, target, onProgress = onProgress)
+        when (val res = videoResolver.resolve(url)) {
+            is VideoResolver.Resolution.Direct -> {
+                downloadClient.downloadDirect(res.url, target, onProgress)
+            }
+            is VideoResolver.Resolution.Unsupported -> error(
+                "Cannot download from ${res.site}: ${res.reason}.\n\n" +
+                    "Download it on a PC (yt-dlp works there), copy the file to " +
+                    "your phone, then use Gallery."
+            )
         }
         registerVideo(project, target, VideoSource.URL, url)
         target
@@ -526,8 +534,4 @@ class ProjectRepository @Inject constructor(
 
     fun hasEmbeds(project: String) = VdubPaths.speakerEmbeds(project).exists()
 
-    suspend fun pingServer(base: String?): Boolean {
-        if (!base.isNullOrBlank()) downloadClient.serverBase = base
-        return downloadClient.ping()
-    }
 }
