@@ -31,11 +31,31 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.9
 
-      - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+      # Log artifact downloads are unreachable from the dev sandbox, so build
+      # output is mirrored into the job summary, which the API does expose.
+      - name: Compile
+        id: compile
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug testDebugUnitTest --stacktrace 2>&1 | tee /tmp/build.log
+        continue-on-error: true
 
-      - name: Assemble debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Surface build output
+        if: always()
+        run: |
+          {
+            echo "## Gradle result: ${{ steps.compile.outcome }}"
+            echo '```'
+            grep -E "^e: |^w: |error:|FAILURE|What went wrong|^\s+> " /tmp/build.log \
+              | head -120 || true
+            echo '```'
+            echo "<details><summary>Last 200 lines</summary>"
+            echo '```'
+            tail -200 /tmp/build.log
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "${{ steps.compile.outcome }}" = "success" ]
 
       - name: Report APK size
         if: success()
