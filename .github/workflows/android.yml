@@ -96,6 +96,26 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
+      # Actions artifacts require a logged-in GitHub session and expire; a
+      # release asset can be downloaded straight onto a phone.
+      - name: Publish rolling debug release
+        if: success() && github.ref_name == 'arena/01a032f2-vdub'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk vdub-step1-debug.apk
+          gh release delete step1-latest --yes --cleanup-tag || true
+          gh release create step1-latest vdub-step1-debug.apk \
+            --target "${GITHUB_SHA}" \
+            --title "vdub Step 1 — debug APK" \
+            --notes "Debug build of Step 1 (video upload, player, subtitles, trim).
+
+          Commit: \`${GITHUB_SHA:0:7}\`
+
+          Install: download the APK on your phone and allow install from unknown
+          sources. On first run, grant **All files access** via the folder icon —
+          the pipeline reads and writes /storage/emulated/0/AI/ directly."
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
