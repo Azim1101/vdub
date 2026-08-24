@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+*.apk
+*.aab
+*.keystore
+# on-device models / media (live in /storage/emulated/0/AI)
+*.onnx
+*.mnn
+*.so
+*.mp4
+*.wav

@@ -1,0 +1,4 @@
+-keep class ai.onnxruntime.** { *; }
+-keep class com.azim.vdub.data.model.** { *; }
+-keepclassmembers class kotlinx.serialization.json.** { *; }
+-dontwarn org.slf4j.**
