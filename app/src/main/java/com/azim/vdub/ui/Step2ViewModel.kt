@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
+import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.SpeakerLine
@@ -101,27 +102,24 @@ class Step2ViewModel @Inject constructor(
         _state.update { it.copy(job = JobState.Idle, message = "Cancelled") }
     }
 
-    /** Fetch campplus.onnx straight to the phone — no PC or adb needed. */
+    /** Fetch campplus straight to the phone — no PC or adb needed. */
     fun downloadModel() = launchJob("Downloading campplus") {
-        val spec = ModelDownloader.CAMPPLUS
-        val file = modelDownloader.download(spec) { p ->
-            when (p) {
-                is ModelDownloader.Progress.Downloading -> progress(
-                    "Downloading campplus",
-                    if (p.total > 0) p.bytes.toFloat() / p.total else -1f,
-                    buildString {
-                        append(mb(p.bytes))
-                        if (p.total > 0) append(" / ").append(mb(p.total))
-                        if (p.mirror > 0) append("  (mirror ${p.mirror + 1}/${p.mirrorCount})")
-                    }
-                )
-                is ModelDownloader.Progress.Verifying ->
-                    progress("Verifying model", -1f, mb(p.bytes))
-            }
+        val model = ModelCatalog.CAMPPLUS
+        modelDownloader.download(model) { p ->
+            progress(
+                if (p.verifying) "Verifying campplus" else "Downloading campplus",
+                p.fraction,
+                if (p.verifying) p.fileName else buildString {
+                    append(mb(p.bytes))
+                    if (p.total > 0) append(" / ").append(mb(p.total))
+                    if (p.mirror > 0) append("  (mirror ${p.mirror + 1})")
+                }
+            )
         }
+        val file = SpeakerEmbedder.modelFile()
         _state.update {
             it.copy(
-                modelPresent = true,
+                modelPresent = SpeakerEmbedder.isModelPresent(),
                 modelPath = file.absolutePath,
                 modelSizeBytes = file.length(),
                 job = JobState.Done("Model ready", mb(file.length()))
