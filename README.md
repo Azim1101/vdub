@@ -27,7 +27,7 @@ Pipeline: video → subtitles → per-line clips → diarization → emotion →
 ├─────────────────────────────────┤
 │  3  Translation Subtitles       │  [Manual] [Auto NLLB] [Export]
 ├─────────────────────────────────┤
-│  ✂  Video Trim — Choti Clips    │  [Trim Karo → 190 Clips] + progress
+│  ✂  Audio Trim — Choti Clips    │  [Trim Karo → 190 Clips] + progress
 ├─────────────────────────────────┤
 │  [ Next → Step 2: Diarization ] │
 └─────────────────────────────────┘
@@ -77,6 +77,17 @@ s = (start - 0.2) * sr ;  e = (end + 0.2) * sr ;  clip = wav[s:e]
 Each clip is one seek + one read of the exact byte range — no subprocess, no full-file
 decode, 190 clips in one pass. *Verified byte-identical to the source range, with
 clamping at both ends.*
+
+### The video is never cut
+
+Only `org_audio.wav` is sliced. `input_video.mp4` stays whole, on purpose:
+
+- diarization, emotion and TTS all read **audio only** — no model looks at frames
+- the final mux needs the **full-length video** to attach the dubbed track to
+- cutting a 142 MB mp4 190 times means re-encoding: minutes of work, GBs of disk,
+  and generation loss — for output nothing downstream consumes
+
+Audio slicing does the same job in seconds.
 
 **4. Resume-safe.**
 Room DB **plus** `S01.done` markers on disk. Reopening a project rehydrates from

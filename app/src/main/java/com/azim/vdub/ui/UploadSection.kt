@@ -405,8 +405,8 @@ fun TrimSection(
 ) {
     SectionCard(
         number = "✂",
-        title = "Video Trim — Choti Clips",
-        subtitle = if (clipCount > 0) "$clipCount clips · $clipsSizeLabel"
+        title = "Audio Trim — Choti Clips",
+        subtitle = if (clipCount > 0) "$clipCount audio clips · $clipsSizeLabel"
         else "Cut org_audio.wav into per-line clips",
         done = clipCount > 0
     ) {
@@ -417,6 +417,14 @@ fun TrimSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Note: the video itself is never cut. Diarization, emotion and TTS " +
+                "only read audio, and Step 6 muxes the dubbed track onto the " +
+                "original full-length mp4 — so input_video.mp4 stays intact.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary
+        )
         Spacer(Modifier.height(10.dp))
 
         Row(
@@ -425,7 +433,7 @@ fun TrimSection(
         ) {
             ActionChip(
                 Icons.Default.ContentCut,
-                if (lineCount > 0) "Trim Karo → $lineCount Clips" else "Trim Karo",
+                if (lineCount > 0) "Trim Karo → $lineCount Audio Clips" else "Trim Karo",
                 Modifier.weight(1f),
                 enabled = canTrim,
                 primary = true,
