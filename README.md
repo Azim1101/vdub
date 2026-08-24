@@ -274,6 +274,31 @@ and downloads are validated before install.
 |---|---|---|
 | 1 | Upload + player + trim | ✅ done |
 | 2 | Speaker diarization | ✅ done |
-| 3 | Emotion | model wired, stage next |
-| 4 | Translation | model wired, stage next |
-| 5 | TTS + mux | model wired, stage next |
+| 3 | Emotion | ✅ done |
+| 4 | Translation (NLLB) | next |
+| 5 | TTS + mux (Kokoro) | next |
+
+## Step 3 — Emotion
+
+Tags each clip with one of nine emotions, writes `out/script_emotion.json` +
+`S03.done`. Every line can be corrected by tapping it.
+
+**The classifier head is a separate file.** emotion2vec's ONNX graph outputs
+frame *features*, not probabilities — `emotion2vec_head.json` carries the
+`weight`/`bias`/`labels`. The app mean-pools over time, then applies
+`W @ pooled + B` and softmax. Loading only the graph gives features that look
+fine and classify nothing, so the head is required and its shapes are checked
+against the model output.
+
+**The two audio models want opposite input scales:**
+
+| Model | Input |
+|---|---|
+| campplus | kaldi fbank on the ±32768 integer scale |
+| emotion2vec | raw waveform normalised to [-1, 1] |
+
+Feeding either one the other's scale produces confident nonsense rather than an
+error, so each reader does its own conversion.
+
+Emotion sets delivery strength for the voice stage: angry 1.4×, happy 1.1×,
+sad 0.9×.
