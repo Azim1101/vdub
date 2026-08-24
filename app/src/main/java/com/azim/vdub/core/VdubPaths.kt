@@ -42,6 +42,8 @@ object VdubPaths {
 
     fun outDir(project: String) = File(projectDir(project), "out")
     fun scriptRaw(project: String) = File(outDir(project), "script_raw.json")
+    fun scriptSpeakers(project: String) = File(outDir(project), "script_speakers.json")
+    fun speakerEmbeds(project: String) = File(outDir(project), "speaker_embeds.bin")
 
     /** Resume markers: S01.done ... S05.done */
     fun stepMarker(project: String, step: Int) =

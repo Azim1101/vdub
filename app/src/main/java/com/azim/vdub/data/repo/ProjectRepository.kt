@@ -6,6 +6,8 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.azim.vdub.audio.AudioExtractor
 import com.azim.vdub.audio.ClipCutter
+import com.azim.vdub.audio.SpeakerCluster
+import com.azim.vdub.audio.SpeakerEmbedder
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.local.ClipDao
 import com.azim.vdub.data.local.ClipEntity
@@ -13,6 +15,8 @@ import com.azim.vdub.data.local.ProjectDao
 import com.azim.vdub.data.local.ProjectEntity
 import com.azim.vdub.data.model.ScriptLine
 import com.azim.vdub.data.model.ScriptRaw
+import com.azim.vdub.data.model.SpeakerLine
+import com.azim.vdub.data.model.SpeakerScript
 import com.azim.vdub.data.model.SrtCue
 import com.azim.vdub.data.model.VideoSource
 import com.azim.vdub.net.DownloadClient
@@ -382,6 +386,145 @@ class ProjectRepository @Inject constructor(
         projectDao.upsert(entity)
         entity
     }
+
+    // ------------------------------------------------------- Step 2: speakers
+
+    /**
+     * Run campplus over every clip and cache the embeddings.
+     *
+     * Embeddings are the expensive part (190 ONNX inferences); clustering is
+     * milliseconds. Caching to speaker_embeds.bin means re-tuning the
+     * threshold is instant instead of a full re-run.
+     */
+    suspend fun embedSpeakers(
+        project: String,
+        onProgress: (Int, Int) -> Unit
+    ): LinkedHashMap<String, FloatArray> = withContext(Dispatchers.Default) {
+        val script = readScriptRaw(project) ?: error("Run Step 1 first")
+        require(script.lines.isNotEmpty()) { "No lines to embed" }
+
+        val clips = script.lines.map { VdubPaths.clipFile(project, it.id) }
+        val missing = clips.count { !it.exists() }
+        check(missing == 0) {
+            "$missing of ${clips.size} clips are missing — re-run the Step 1 trim."
+        }
+
+        val embeds = SpeakerEmbedder.open().use { it.embedAll(clips, onProgress) }
+        check(embeds.isNotEmpty()) { "campplus produced no embeddings" }
+        writeEmbeds(project, embeds)
+        embeds
+    }
+
+    /** Cluster cached (or freshly computed) embeddings into speakers. */
+    suspend fun clusterSpeakers(
+        project: String,
+        threshold: Float,
+        targetK: Int?,
+        embeds: LinkedHashMap<String, FloatArray>? = null
+    ): SpeakerScript = withContext(Dispatchers.Default) {
+        val script = readScriptRaw(project) ?: error("Run Step 1 first")
+        val vectors = embeds ?: readEmbeds(project)
+            ?: error("No embeddings cached — run Extract first")
+
+        val order = script.lines.filter { vectors.containsKey(clipName(it.id)) }
+        val list = order.map { vectors.getValue(clipName(it.id)) }
+        check(list.isNotEmpty()) { "No embeddings match the script" }
+
+        val result = if (targetK != null) SpeakerCluster.clusterToK(list, targetK)
+        else SpeakerCluster.cluster(list, threshold)
+
+        val previous = readSpeakerScript(project)
+        val lines = order.mapIndexed { i, line ->
+            SpeakerLine(
+                utt = clipName(line.id),
+                start = line.start,
+                end = line.end,
+                text = line.text,
+                spk = "Speaker ${result.labels[i] + 1}",
+                emotion = line.emotion ?: "NEUTRAL",
+                hi = line.translated.orEmpty()
+            )
+        }
+
+        val speakerScript = SpeakerScript(
+            project = project,
+            speakerCount = result.speakerCount,
+            threshold = threshold,
+            // keep any names the user already typed
+            names = previous?.names.orEmpty(),
+            lines = lines
+        )
+        writeSpeakerScript(project, speakerScript)
+
+        // mirror the speaker back into script_raw.json so later steps see it
+        val byUtt = lines.associateBy { it.utt }
+        writeScriptRaw(
+            project,
+            script.lines.map { l -> l.copy(speaker = byUtt[clipName(l.id)]?.spk) },
+            script.cueCount
+        )
+        VdubPaths.markStepDone(project, 2)
+        speakerScript
+    }
+
+    suspend fun renameSpeaker(project: String, speakerId: String, name: String): SpeakerScript? =
+        withContext(Dispatchers.IO) {
+            val current = readSpeakerScript(project) ?: return@withContext null
+            val names = current.names.toMutableMap()
+            if (name.isBlank()) names.remove(speakerId) else names[speakerId] = name.trim()
+            val updated = current.copy(names = names)
+            writeSpeakerScript(project, updated)
+            updated
+        }
+
+    suspend fun readSpeakerScript(project: String): SpeakerScript? = withContext(Dispatchers.IO) {
+        val f = VdubPaths.scriptSpeakers(project)
+        if (!f.exists()) return@withContext null
+        runCatching { json.decodeFromString(SpeakerScript.serializer(), f.readText()) }.getOrNull()
+    }
+
+    private suspend fun writeSpeakerScript(project: String, script: SpeakerScript) =
+        withContext(Dispatchers.IO) {
+            VdubPaths.ensureProject(project)
+            VdubPaths.scriptSpeakers(project)
+                .writeText(json.encodeToString(SpeakerScript.serializer(), script))
+        }
+
+    private fun clipName(id: Int) = "line_%04d".format(id)
+
+    /** Compact binary cache: [count][dim] then name-length/name/floats. */
+    private fun writeEmbeds(project: String, embeds: Map<String, FloatArray>) {
+        val f = VdubPaths.speakerEmbeds(project)
+        f.parentFile?.mkdirs()
+        java.io.DataOutputStream(f.outputStream().buffered()).use { out ->
+            out.writeInt(embeds.size)
+            out.writeInt(embeds.values.firstOrNull()?.size ?: 0)
+            embeds.forEach { (name, vec) ->
+                out.writeUTF(name)
+                vec.forEach(out::writeFloat)
+            }
+        }
+    }
+
+    fun readEmbeds(project: String): LinkedHashMap<String, FloatArray>? {
+        val f = VdubPaths.speakerEmbeds(project)
+        if (!f.exists()) return null
+        return runCatching {
+            java.io.DataInputStream(f.inputStream().buffered()).use { input ->
+                val count = input.readInt()
+                val dim = input.readInt()
+                val map = LinkedHashMap<String, FloatArray>(count)
+                repeat(count) {
+                    val name = input.readUTF()
+                    val vec = FloatArray(dim) { input.readFloat() }
+                    map[name] = vec
+                }
+                map
+            }
+        }.getOrNull()
+    }
+
+    fun hasEmbeds(project: String) = VdubPaths.speakerEmbeds(project).exists()
 
     suspend fun pingServer(base: String?): Boolean {
         if (!base.isNullOrBlank()) downloadClient.serverBase = base

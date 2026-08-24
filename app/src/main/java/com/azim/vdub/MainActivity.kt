@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +42,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +54,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.azim.vdub.ui.ClipsPreviewSection
+import com.azim.vdub.ui.ModelStatusCard
+import com.azim.vdub.ui.NextStep3Button
 import com.azim.vdub.ui.NextStepButton
+import com.azim.vdub.ui.SpeakerSection
+import com.azim.vdub.ui.Step2ViewModel
 import com.azim.vdub.ui.SectionCard
 import com.azim.vdub.ui.StepBadge
 import com.azim.vdub.ui.SubtitlesSection
@@ -73,16 +82,128 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    Step1Screen()
+                    VdubRoot()
                 }
             }
         }
     }
 }
 
+/** Two-screen shell: Step 1 -> Step 2, with the project name carried across. */
+@Composable
+fun VdubRoot() {
+    var screen by rememberSaveable { mutableStateOf(1) }
+    var project by rememberSaveable { mutableStateOf("vdub_step") }
+
+    when (screen) {
+        1 -> Step1Screen(
+            onProjectChanged = { project = it },
+            onNext = { name ->
+                project = name
+                screen = 2
+            }
+        )
+        else -> Step2Screen(
+            project = project,
+            onBack = { screen = 1 }
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Step1Screen(vm: Step1ViewModel = hiltViewModel()) {
+fun Step2Screen(
+    project: String,
+    onBack: () -> Unit,
+    vm: Step2ViewModel = hiltViewModel()
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(project) { vm.load(project) }
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            vm.dismissMessage()
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎬 vdub")
+                        Spacer(Modifier.width(10.dp))
+                        StepBadge(
+                            text = if (state.step2Done) "Step 2 ✓" else "Step 2",
+                            done = state.step2Done
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Step 1")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { ModelStatusCard(state.modelPresent, state.modelPath) }
+            item {
+                SpeakerSection(
+                    speakers = state.speakers,
+                    clipCount = state.clipCount,
+                    embedCount = state.embedCount,
+                    threshold = state.threshold,
+                    useTargetK = state.useTargetK,
+                    targetK = state.targetK,
+                    modelPresent = state.modelPresent,
+                    hasEmbeds = state.hasEmbeds,
+                    busy = state.busy,
+                    job = state.job,
+                    onThresholdChange = vm::setThreshold,
+                    onUseTargetK = vm::setUseTargetK,
+                    onTargetKChange = vm::setTargetK,
+                    onExtract = vm::extractAndCluster,
+                    onRecluster = vm::recluster,
+                    onCancel = vm::cancel,
+                    onRename = vm::renameSpeaker
+                )
+            }
+            item {
+                ClipsPreviewSection(
+                    lines = state.lines,
+                    speakers = state.speakers,
+                    nameFor = state::nameFor
+                )
+            }
+            item {
+                NextStep3Button(enabled = state.step2Done && !state.busy) { }
+            }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Step1Screen(
+    onProjectChanged: (String) -> Unit = {},
+    onNext: (String) -> Unit = {},vm: Step1ViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -112,6 +233,7 @@ fun Step1Screen(vm: Step1ViewModel = hiltViewModel()) {
             vm.dismissMessage()
         }
     }
+    LaunchedEffect(state.projectName) { onProjectChanged(state.projectName) }
 
     // ---- pickers ----
     val videoPicker = rememberLauncherForActivityResult(
@@ -294,7 +416,9 @@ fun Step1Screen(vm: Step1ViewModel = hiltViewModel()) {
 
             // ---------- next ----------
             item {
-                NextStepButton(enabled = state.step1Done && !state.busy) { /* Step 2 */ }
+                NextStepButton(enabled = state.step1Done && !state.busy) {
+                    onNext(state.projectName)
+                }
             }
             item { Spacer(Modifier.height(20.dp)) }
         }

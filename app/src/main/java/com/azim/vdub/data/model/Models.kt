@@ -29,6 +29,27 @@ data class ScriptLine(
     val durationSec: Double get() = (end - start).coerceAtLeast(0.0)
 }
 
+/** Step 2 output: out/script_speakers.json */
+@Serializable
+data class SpeakerLine(
+    @SerialName("utt") val utt: String,              // line_0000
+    @SerialName("start") val start: Double,
+    @SerialName("end") val end: Double,
+    @SerialName("text") val text: String,
+    @SerialName("spk") val spk: String,              // "Speaker 1"
+    @SerialName("emotion") val emotion: String = "NEUTRAL",
+    @SerialName("hi") val hi: String = ""            // translated text, Step 4
+)
+
+@Serializable
+data class SpeakerScript(
+    @SerialName("project") val project: String,
+    @SerialName("speaker_count") val speakerCount: Int,
+    @SerialName("threshold") val threshold: Float,
+    @SerialName("names") val names: Map<String, String> = emptyMap(),
+    @SerialName("lines") val lines: List<SpeakerLine> = emptyList()
+)
+
 @Serializable
 data class ScriptRaw(
     @SerialName("project") val project: String,
