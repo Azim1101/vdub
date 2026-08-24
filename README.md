@@ -132,25 +132,27 @@ stale clips automatically.
 
 ---
 
-## Download server contract
+## URL download — what works on-device
 
-```
-GET  /health                          -> 200
-POST /download  {"url","format","project"}
-     -> {"ok":true,"file_url":"/files/x.mp4","size_bytes":149000000}
-GET  {file_url}                       -> mp4 bytes (must support Range)
-```
+There is no helper server. `VideoResolver` runs in the app:
 
-Reference implementation:
-```python
-subprocess.run(["yt-dlp", "-f", fmt, "-o", out, url],
-               env={**os.environ, "OPENSSL_CONF": "/dev/null"})
-```
+| Input | Result |
+|---|---|
+| Direct `.mp4` / `.webm` / `.m3u8` link | ✅ downloads |
+| Page with `<video src>`, `og:video`, JSON `contentUrl` | ✅ finds and downloads |
+| iQIYI, YouTube, Netflix, Hotstar | ❌ named and refused |
 
-Point the app at it via the in-app field, or bake a default in:
-```bash
-./gradlew assembleDebug -PVDUB_SERVER=https://xxxx.trycloudflare.com
-```
+The refusal is deliberate. yt-dlp is ~200k lines of Python with per-site
+extractors, and iQIYI additionally signs its streams in JavaScript — that cannot
+run inside an APK. For those, download on a PC and pick the file from **Gallery**.
+
+## Storage
+
+Writing to `/storage/emulated/0/AI` needs **All-files access**, which Android
+only grants from Settings. Until then the app uses its own external dir
+(`/Android/data/com.azim.vdub/files/AI/`) — no permission required, everything
+works, but `adb push` and other apps cannot see it. A banner offers the upgrade,
+and models are looked up in **both** roots.
 
 ---
 
