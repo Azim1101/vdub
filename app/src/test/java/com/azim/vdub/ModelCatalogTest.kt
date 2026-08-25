@@ -51,14 +51,29 @@ class ModelCatalogTest {
      * memory ceiling is the largest model, not the sum.
      */
     @Test
-    fun `peak ram is the largest model and fits a 6gb phone`() {
-        assertEquals(ModelCatalog.ALL.maxOf { it.sizeBytes }, ModelCatalog.peakRamBytes)
+    fun `peak ram is one stage, not the sum`() {
+        assertEquals(ModelCatalog.ALL.maxOf { it.ramBytes }, ModelCatalog.peakRamBytes)
         assertTrue(ModelCatalog.peakRamBytes < ModelCatalog.totalBytes)
-        // comfortably under what a 6 GB device gives one app
+    }
+
+    /** Steps 1-4 must stay comfortable on a 6 GB phone. */
+    @Test
+    fun `runnable stages stay under 1gb`() {
         assertTrue(
-            "peak ${ModelCatalog.peakRamBytes / 1024 / 1024} MB too big",
-            ModelCatalog.peakRamBytes < 1_000_000_000L
+            "peak ${ModelCatalog.peakRunnableRamBytes / 1024 / 1024} MB too big",
+            ModelCatalog.peakRunnableRamBytes < 1_000_000_000L
         )
+    }
+
+    /**
+     * A quantized model that dequantizes on the fly needs more RAM than it
+     * occupies on disk, so the catalog must not equate the two.
+     */
+    @Test
+    fun `chatterbox declares more ram than its file size`() {
+        val cb = ModelCatalog.byId("chatterbox_hi")!!
+        assertTrue(cb.ramBytes > cb.sizeBytes)
+        assertTrue(cb.ramBytes > 1_500_000_000L)
     }
 
     @Test
@@ -78,6 +93,36 @@ class ModelCatalogTest {
     fun `every stage has at least one model`() {
         ModelCatalog.Stage.entries.forEach { stage ->
             assertTrue("no model for $stage", ModelCatalog.forStage(stage).isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `tts is the project chatterbox model, not a substitute`() {
+        val tts = ModelCatalog.forStage(ModelCatalog.Stage.TTS)
+        assertEquals(1, tts.size)
+        val m = tts.first()
+        assertEquals("chatterbox_hi", m.id)
+        // must come from the project's own repo
+        assertTrue(
+            m.files.all { f -> f.urls.any { it.contains("vdub-hindi-dubbing-lite") } }
+        )
+        // voice cloning is the whole point
+        assertTrue(m.description.contains("Clones", ignoreCase = true))
+    }
+
+    /**
+     * Chatterbox ships safetensors, which ONNX Runtime cannot load. The flag
+     * must say so, otherwise Settings would present it as ready and Step 5
+     * would fail at run time instead.
+     */
+    @Test
+    fun `safetensors models are marked not runnable`() {
+        val cb = ModelCatalog.byId("chatterbox_hi")!!
+        assertEquals(ModelCatalog.Runtime.SAFETENSORS, cb.runtime)
+        assertTrue(!cb.runnable)
+
+        listOf("campplus", "emotion2vec", "nllb", "sensevoice").forEach {
+            assertTrue("$it should be runnable", ModelCatalog.byId(it)!!.runnable)
         }
     }
 

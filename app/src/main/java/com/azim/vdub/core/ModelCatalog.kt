@@ -28,6 +28,14 @@ object ModelCatalog {
      * @param required  pipeline cannot run this stage without it
      * @param files     every file that must land on disk (model + tokenizer…)
      */
+    /** How the weights must be executed. */
+    enum class Runtime {
+        /** Loadable by ONNX Runtime Mobile — works today. */
+        ONNX,
+        /** PyTorch/safetensors — needs an inference path that does not exist yet. */
+        SAFETENSORS
+    }
+
     data class Model(
         val id: String,
         val name: String,
@@ -37,9 +45,23 @@ object ModelCatalog {
         val files: List<ModelFile>,
         val required: Boolean = true,
         val license: String = "",
-        val note: String = ""
+        val note: String = "",
+        val runtime: Runtime = Runtime.ONNX,
+        /**
+         * Working-set RAM while this stage runs. Usually close to the file
+         * size, but a quantized model that dequantizes on the fly needs far
+         * more than it occupies on disk — Chatterbox is 628 MB of weights and
+         * ~1.9 GB live. Defaults to the file size when not stated.
+         */
+        val runtimeRamBytes: Long = 0L
     ) {
         val sizeMb: Int get() = (sizeBytes / 1024 / 1024).toInt()
+
+        /** True when the app can actually run this model today. */
+        val runnable: Boolean get() = runtime == Runtime.ONNX
+
+        val ramBytes: Long get() = if (runtimeRamBytes > 0) runtimeRamBytes else sizeBytes
+        val ramMb: Int get() = (ramBytes / 1024 / 1024).toInt()
     }
 
     data class ModelFile(
@@ -178,56 +200,72 @@ object ModelCatalog {
 
     // ------------------------------------------------------------ Step 6
 
-    val KOKORO = Model(
-        id = "kokoro",
-        name = "Kokoro-82M TTS",
+    /**
+     * Chatterbox Hindi INT8 — the project's own TTS (Bbkblo/vdub-hindi-dubbing-lite).
+     *
+     * This is the voice-cloning model the pipeline was designed around: it
+     * clones the original actor from their clip instead of using a preset
+     * voice, and takes an `exaggeration` knob that the Step 3 emotion labels
+     * feed directly (ANGRY 1.4 / HAPPY 1.1 / SAD 0.4 / NEUTRAL 0.5).
+     *
+     * Important: these weights are **safetensors + PyTorch**, not ONNX, and
+     * the vocoder (S3Gen, ~1.06 GB) lives upstream and is fetched separately.
+     * ONNX Runtime cannot load them, so Step 5 needs an inference path for
+     * this format — see [runtime].
+     */
+    val CHATTERBOX_HI = Model(
+        id = "chatterbox_hi",
+        name = "Chatterbox Hindi INT8 (voice cloning)",
         stage = Stage.TTS,
-        sizeBytes = 92_000_000L,
-        description = "Speaks the translated lines. Includes Hindi and Chinese " +
-            "voices. Small enough to run comfortably on a phone.",
-        license = "Apache-2.0",
-        note = "Preset voices — not a clone of the original actor.",
+        sizeBytes = 658_584_623L,
+        description = "Clones each speaker's voice from their own clips and " +
+            "speaks the Hindi lines. Emotion sets the exaggeration.",
+        license = "MIT (ResembleAI) — output carries a PerTh watermark",
+        note = "Q8_0 quantized Llama-520M. Needs the S3Gen vocoder (~1.06 GB) " +
+            "as well; ~1.9 GB RAM while speaking.",
+        runtime = Runtime.SAFETENSORS,
+        runtimeRamBytes = 1_900_000_000L,
         files = listOf(
             ModelFile(
-                localName = "kokoro.onnx",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "onnx/model_q8f16.onnx"),
-                approxBytes = 92_000_000L
+                localName = "chatterbox/t3_hi_int8.safetensors",
+                urls = hf(
+                    "Bbkblo/vdub-hindi-dubbing-lite",
+                    "models/chatterbox_hi_lite/t3_hi_int8.safetensors"
+                ),
+                approxBytes = 652_816_008L,
+                kind = Kind.BIN
             ),
             ModelFile(
-                localName = "kokoro_tokenizer.json",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "tokenizer.json"),
-                approxBytes = 500_000L,
+                localName = "chatterbox/ve.pt",
+                urls = hf(
+                    "Bbkblo/vdub-hindi-dubbing-lite",
+                    "models/chatterbox_hi_lite/ve.pt"
+                ),
+                approxBytes = 5_698_626L,
+                kind = Kind.BIN
+            ),
+            ModelFile(
+                localName = "chatterbox/grapheme_mtl_merged_expanded_v1.json",
+                urls = hf(
+                    "Bbkblo/vdub-hindi-dubbing-lite",
+                    "models/chatterbox_hi_lite/grapheme_mtl_merged_expanded_v1.json"
+                ),
+                approxBytes = 69_989L,
                 kind = Kind.JSON
             ),
-            // Hindi voices
             ModelFile(
-                localName = "voices/hf_alpha.bin",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "voices/hf_alpha.bin"),
-                approxBytes = 524_288L,
-                kind = Kind.BIN
-            ),
-            ModelFile(
-                localName = "voices/hm_omega.bin",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "voices/hm_omega.bin"),
-                approxBytes = 524_288L,
-                kind = Kind.BIN
-            ),
-            ModelFile(
-                localName = "voices/hf_beta.bin",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "voices/hf_beta.bin"),
-                approxBytes = 524_288L,
-                kind = Kind.BIN
-            ),
-            ModelFile(
-                localName = "voices/hm_psi.bin",
-                urls = hf("onnx-community/Kokoro-82M-v1.0-ONNX", "voices/hm_psi.bin"),
-                approxBytes = 524_288L,
-                kind = Kind.BIN
+                localName = "chatterbox/quant_manifest.json",
+                urls = hf(
+                    "Bbkblo/vdub-hindi-dubbing-lite",
+                    "models/chatterbox_hi_lite/quant_manifest.json"
+                ),
+                approxBytes = 60_258L,
+                kind = Kind.JSON
             )
         )
     )
 
-    val ALL = listOf(CAMPPLUS, SENSEVOICE, EMOTION2VEC, NLLB, KOKORO)
+    val ALL = listOf(CAMPPLUS, SENSEVOICE, EMOTION2VEC, NLLB, CHATTERBOX_HI)
 
     fun byId(id: String): Model? = ALL.firstOrNull { it.id == id }
 
@@ -236,6 +274,14 @@ object ModelCatalog {
     /** Total disk if the user downloads everything. */
     val totalBytes: Long get() = ALL.sumOf { it.sizeBytes }
 
-    /** Peak RAM is the biggest single model, since stages run one at a time. */
-    val peakRamBytes: Long get() = ALL.maxOf { it.sizeBytes }
+    /**
+     * Peak RAM is the heaviest single stage, since stages run one at a time —
+     * not the sum. Uses working-set RAM, which for a dequantizing model is
+     * larger than its file.
+     */
+    val peakRamBytes: Long get() = ALL.maxOf { it.ramBytes }
+
+    /** Peak across the stages that actually run today (ONNX only). */
+    val peakRunnableRamBytes: Long get() =
+        ALL.filter { it.runnable }.maxOf { it.ramBytes }
 }

@@ -91,9 +91,11 @@ fun SettingsScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "No server, no account. Stages run one at a time, so " +
-                                "only one model is in memory at once — peak RAM is " +
-                                "about ${mb(ModelCatalog.peakRamBytes)}, not the " +
-                                "${mb(ModelCatalog.totalBytes)} total on disk.",
+                                "only one model is in memory at once — about " +
+                                "${mb(ModelCatalog.peakRunnableRamBytes)} for steps " +
+                                "1–4, not the ${mb(ModelCatalog.totalBytes)} total " +
+                                "on disk. Voice cloning is heavier " +
+                                "(~${mb(ModelCatalog.CHATTERBOX_HI.ramBytes)}).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -211,6 +213,26 @@ private fun ModelCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
+            }
+
+            // Be explicit when a model can be fetched but not yet executed,
+            // rather than letting it look ready and fail at Step 5.
+            if (!row.model.runnable) {
+                Spacer(Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "PyTorch weights — ONNX Runtime cannot load these yet. " +
+                            "Downloading stores them for the voice stage; it " +
+                            "will not run until that stage ships.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
             }
 
             if (row.downloading) {

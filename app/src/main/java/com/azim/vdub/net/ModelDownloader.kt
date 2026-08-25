@@ -182,7 +182,14 @@ class ModelDownloader @Inject constructor() {
         val head = file.inputStream().use { it.readNBytes(256) }
         val asText = String(head).trim()
 
-        if (asText.startsWith("<") || asText.startsWith("<!DOCTYPE", true)) {
+        // Detect an HTML error page saved under the model's name. Match real
+        // markup only — SenseVoice's tokens.txt legitimately begins "<unk> 0",
+        // and a naive startsWith("<") rejected the whole download.
+        val looksLikeHtml = Regex(
+            """^\s*(<!DOCTYPE\s+html|<html\b|<head\b|<body\b|<\?xml)""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(asText)
+        if (looksLikeHtml) {
             error("server returned a web page, not the file")
         }
         if (spec.approxBytes > 0 && size < spec.approxBytes * 0.5) {
