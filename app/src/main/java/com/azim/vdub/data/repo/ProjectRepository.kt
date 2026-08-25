@@ -11,6 +11,8 @@ import com.azim.vdub.audio.DubTimeline
 import com.azim.vdub.audio.EmotionClassifier
 import com.azim.vdub.audio.VideoMuxer
 import com.azim.vdub.audio.VoiceEngine
+import com.azim.vdub.audio.WavIo
+import com.azim.vdub.audio.resampleLinear
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
 import com.azim.vdub.core.VdubPaths
@@ -923,8 +925,9 @@ class ProjectRepository @Inject constructor(
 
     fun spokenClipCount(project: String): Int =
         VdubPaths.hiClipsDir(project)
-            .listFiles { f -> f.extension == "wav" && f.length() > WAV_MIN_BYTES }
-            ?.size ?: 0
+            .listFiles(java.io.FileFilter { f ->
+                f.extension == "wav" && f.length() > WAV_MIN_BYTES
+            })?.size ?: 0
 
     private fun readWavFloat(f: File): FloatArray {
         val fmt = WavIo.readFormat(f)
