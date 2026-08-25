@@ -14,7 +14,7 @@ video → subtitles → per-line clips → speakers → emotion → translation 
 | 2 | Speaker diarization (CAM++) | ✅ done |
 | 3 | Emotion detection (emotion2vec+) | ✅ done |
 | 4 | Translation (NLLB-200) | model wired, stage next |
-| 5 | Voice + mux (Chatterbox Hindi) | model wired, stage next — see below |
+| 5 | Voice + mux (Chatterbox ONNX) | model wired, stage next |
 
 ---
 
@@ -40,8 +40,8 @@ each stage closes its ONNX session before the next opens.
 
 | | |
 |---|---|
-| Disk, if you download everything | **1.79 GB** |
-| **Peak RAM** | **591 MB** for Steps 1–4 · ~1.9 GB during Chatterbox TTS |
+| Disk, if you download everything | **2.86 GB** |
+| **Peak RAM** | **591 MB** analysis · ~1.5 GB while speaking |
 
 A unit test pins that invariant so it cannot quietly regress.
 
@@ -58,7 +58,8 @@ with size, licence, purpose, disk used and free space.
 | SenseVoice ASR | 237 MB | Transcribe | no — only if you have no SRT |
 | emotion2vec+ base | 355 MB | Emotion | yes |
 | NLLB-200 distilled 600M | 591 MB | Translate | yes · CC-BY-NC |
-| Chatterbox Hindi INT8 (voice cloning) | 628 MB | Voice | yes · MIT |
+| Chatterbox Multilingual ONNX (voice cloning) | 1483 MB | Voice | yes · MIT |
+| Chatterbox Hindi INT8 (PyTorch) | 628 MB | Voice | no — not runnable yet |
 
 Every file has two mirrors (huggingface.co and hf-mirror.com), transfers are
 Range-resumable, and each download is validated before install — an HTML error
@@ -301,12 +302,15 @@ CI builds the APK on every push and republishes the `step1-latest` release.
 
 ## Known limitations
 
-- **Chatterbox ships PyTorch weights, not ONNX.** `t3_hi_int8.safetensors` +
-  `ve.pt` cannot be loaded by ONNX Runtime, which is the only inference engine
-  in the app today. Settings will download and store them, and says plainly
-  that they will not run until Step 5 ships an inference path for that format.
-  It also needs the S3Gen vocoder (~1.06 GB) fetched separately, and ~1.9 GB RAM
-  while speaking — the one stage that genuinely strains a 6 GB phone.
+- **Voice cloning uses the ONNX Chatterbox, not the lite safetensors.** The
+  project's own `vdub-hindi-dubbing-lite` ships `t3_hi_int8.safetensors` and a
+  PyTorch `ve.pt`, and expects the 1.06 GB S3Gen vocoder from upstream — none of
+  which ONNX Runtime can execute. `onnx-community/chatterbox-multilingual-ONNX`
+  is the same model family with a real ONNX export, includes Hindi, and keeps
+  zero-shot cloning and exaggeration control. The lite entry is kept but marked
+  optional and not runnable.
+- **Speaking is the heavy stage** — about 1.5 GB RAM and roughly a minute per
+  line on a phone CPU, versus 591 MB for everything before it.
 - Chatterbox output carries a **PerTh watermark** (upstream behaviour), and you
   should have permission from whoever owns a voice before cloning it.
 - **BGM separation (TIGER-DnR) is not included.** That repo ships only
