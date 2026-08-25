@@ -31,6 +31,8 @@ data class SpeakerPlan(
     val lineCount: Int,
     val referenceSeconds: Double,
     val referenceCount: Int,
+    val referenceNames: List<String>,
+    val sampleHindi: String,
     val colorIndex: Int
 ) {
     /** Zero-shot cloning degrades badly below a few seconds of reference. */
@@ -104,6 +106,9 @@ class Step5ViewModel @Inject constructor(
                 lineCount = lines.count { l -> l.spk == spk },
                 referenceSeconds = secs,
                 referenceCount = refs.size,
+                referenceNames = refs.map { f -> f.nameWithoutExtension },
+                sampleHindi = lines.firstOrNull { l -> l.spk == spk && l.hi.isNotBlank() }
+                    ?.hi.orEmpty(),
                 colorIndex = i
             )
         }

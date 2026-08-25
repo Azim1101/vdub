@@ -844,10 +844,19 @@ class ProjectRepository @Inject constructor(
                 }
 
                 val voice = voices.getOrPut(line.spk) {
-                    val refs = referenceClipsFor(project, line.spk, limit = 1)
-                    val ref = refs.firstOrNull()
-                        ?: paths.defaultVoice.takeIf { it.exists() }
-                        ?: error("No reference audio for ${line.spk}")
+                    // Enrol from several of the speaker's clips joined together,
+                    // not just the longest one: a single short line carries far
+                    // less timbre, and this is the only thing the clone is built
+                    // from. Matches the reference seconds shown in the UI.
+                    val refs = referenceClipsFor(project, line.spk, limit = 3)
+                    val ref = when {
+                        refs.isNotEmpty() -> buildReference(project, line.spk, refs)
+                        paths.defaultVoice.exists() -> paths.defaultVoice
+                        else -> error(
+                            "No usable reference audio for ${line.spk} — its clips " +
+                                "are missing or too short to clone from."
+                        )
+                    }
                     tts.enrol(ref)
                 }
 
@@ -921,6 +930,41 @@ class ProjectRepository @Inject constructor(
 
         VdubPaths.markStepDone(project, 6)
         out
+    }
+
+    /**
+     * Concatenate a speaker's reference clips into one wav for enrolment.
+     *
+     * A short silence is inserted between them so two unrelated lines do not
+     * run into each other as one impossible utterance. Cached per speaker, so
+     * the joins happen once rather than per line.
+     */
+    private fun buildReference(project: String, speaker: String, refs: List<File>): File {
+        val safe = speaker.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val target = File(VdubPaths.outDir(project), "ref_$safe.wav")
+        if (target.exists() && target.length() > WAV_MIN_BYTES) return target
+        if (refs.size == 1) return refs.first()
+
+        val fmt = WavIo.readFormat(refs.first())
+        val gap = ByteArray(fmt.sampleRate / 5 * 2)      // 200 ms of silence
+        val out = java.io.ByteArrayOutputStream()
+        refs.forEachIndexed { i, f ->
+            runCatching {
+                val info = WavIo.readFormat(f)
+                if (info.sampleRate != fmt.sampleRate) return@runCatching
+                val pcm = ByteArray(info.dataBytes.toInt())
+                java.io.RandomAccessFile(f, "r").use { raf ->
+                    raf.seek(info.dataOffset)
+                    raf.readFully(pcm)
+                }
+                if (i > 0) out.write(gap)
+                out.write(pcm)
+            }
+        }
+        val bytes = out.toByteArray()
+        if (bytes.isEmpty()) return refs.first()
+        WavIo.writePcm16(target, bytes, fmt.sampleRate, fmt.channels)
+        return target
     }
 
     fun spokenClipCount(project: String): Int =

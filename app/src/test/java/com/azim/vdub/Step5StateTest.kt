@@ -52,8 +52,13 @@ class Step5StateTest {
     /** A short reference produces a poor clone; flag it rather than hide it. */
     @Test
     fun `short reference audio is flagged`() {
-        val weak = SpeakerPlan("Speaker 2", "Chang Heng", 4, 1.8, 1, 1)
-        val ok = SpeakerPlan("Speaker 1", "Xiao Lanhua", 120, 12.4, 3, 0)
+        val weak = SpeakerPlan(
+            "Speaker 2", "Chang Heng", 4, 1.8, 1, listOf("line_0007"), "नमस्ते", 1
+        )
+        val ok = SpeakerPlan(
+            "Speaker 1", "Xiao Lanhua", 120, 12.4, 3,
+            listOf("line_0001", "line_0004", "line_0009"), "जल्दी करो", 0
+        )
         assertTrue(weak.referenceWeak)
         assertFalse(ok.referenceWeak)
     }

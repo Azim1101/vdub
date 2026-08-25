@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.azim.vdub.data.model.JobState
 
@@ -182,10 +183,34 @@ fun SpeakerVoiceSection(speakers: List<SpeakerPlan>) {
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        "${s.lineCount} lines · %.1f s reference".format(s.referenceSeconds),
+                        "${s.lineCount} lines · %.1f s from %d clip%s".format(
+                            s.referenceSeconds,
+                            s.referenceCount,
+                            if (s.referenceCount == 1) "" else "s"
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // Name the exact clips, so a wrong speaker split is visible
+                    // before a multi-hour run rather than after it.
+                    if (s.referenceNames.isNotEmpty()) {
+                        Text(
+                            s.referenceNames.joinToString(", "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (s.sampleHindi.isNotBlank()) {
+                        Text(
+                            "\u201c${s.sampleHindi.take(48)}\u201d",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 if (s.referenceWeak) {
                     Icon(

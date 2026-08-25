@@ -183,21 +183,30 @@ class ChatterboxTts private constructor(
         val generated = ArrayList<Long>(256)
         generated.add(ChatterboxTokenizer.START_SPEECH_TOKEN.toLong())
 
-        for (step in 0 until MAX_NEW_TOKENS) {
-            coroutineContext.ensureActive()
+        try {
+            for (step in 0 until MAX_NEW_TOKENS) {
+                coroutineContext.ensureActive()
 
-            val (logits, present) = runLanguageModel(embeds, attention, past)
-            past = present
+                val (logits, present) = runLanguageModel(embeds, attention, past)
+                // Release the previous step's cache as soon as the next one
+                // exists; holding both is what blew the heap.
+                past.close()
+                past = present
 
-            val next = pickNextToken(logits, generated)
-            if (next == ChatterboxTokenizer.STOP_SPEECH_TOKEN.toLong()) break
-            generated.add(next)
-            onToken(generated.size)
+                val next = pickNextToken(logits, generated)
+                if (next == ChatterboxTokenizer.STOP_SPEECH_TOKEN.toLong()) break
+                generated.add(next)
+                onToken(generated.size)
 
-            // Next iteration feeds only the new token.
-            embeds = runEmbed(longArrayOf(next), longArrayOf((step + 1).toLong()), exaggeration)
-            seqLen += 1
-            attention = LongArray(seqLen) { 1L }
+                // Next iteration feeds only the new token.
+                embeds = runEmbed(
+                    longArrayOf(next), longArrayOf((step + 1).toLong()), exaggeration
+                )
+                seqLen += 1
+                attention = LongArray(seqLen) { 1L }
+            }
+        } finally {
+            past.close()
         }
 
         // Drop the leading START and any trailing STOP, then prepend the
@@ -239,21 +248,34 @@ class ChatterboxTts private constructor(
     }
 
     /**
-     * KV cache entry held flat.
+     * The KV cache, kept as live ONNX tensors.
      *
-     * The nested-array form cannot express an empty cache: ORT infers the
-     * shape from the arrays, and the first step needs [1, heads, 0, dim],
-     * which it rejects as "zero dimension". A buffer with an explicit shape
-     * carries the zero fine — and avoids rebuilding 60 nested arrays per
-     * token, which at ~1000 steps a line is not free either.
+     * It must not be copied into Java arrays. By 700 tokens each of the 60
+     * entries is ~2.8 MB, so one copy is ~165 MB of heap and holding old and
+     * new at once doubles it — past Android's 512 MB cap, which is exactly the
+     * OOM this hit.
+     *
+     * Tensors returned by a run are backed by native memory owned by that
+     * result, so the result is kept alive alongside them and closed only once
+     * the next step has replaced it.
      */
-    private class KvTensor(val data: FloatArray, val shape: LongArray)
+    private class KvCache(
+        val tensors: Map<String, OnnxTensor>,
+        private val owner: AutoCloseable?
+    ) : AutoCloseable {
+        override fun close() {
+            // Closing the owning result frees the tensors with it; standalone
+            // tensors (the initial empty cache) own themselves.
+            if (owner != null) runCatching { owner.close() }
+            else tensors.values.forEach { runCatching { it.close() } }
+        }
+    }
 
     private fun runLanguageModel(
         embeds: Array<Array<FloatArray>>,
         attention: LongArray,
-        past: Map<String, KvTensor>
-    ): Pair<FloatArray, Map<String, KvTensor>> {
+        past: KvCache
+    ): Pair<FloatArray, KvCache> {
         val seq = embeds[0].size
         val hidden = embeds[0][0].size
         val flat = FloatArray(seq * hidden)
@@ -274,32 +296,31 @@ class ChatterboxTts private constructor(
                 env, LongBuffer.wrap(attention), longArrayOf(1, attention.size.toLong())
             ).also { toClose.add(it); inputs["attention_mask"] = it }
 
-            past.forEach { (name, kv) ->
-                OnnxTensor.createTensor(env, FloatBuffer.wrap(kv.data), kv.shape)
-                    .also { toClose.add(it); inputs[name] = it }
-            }
+            // Feed the previous step's tensors straight back in — no copy.
+            past.tensors.forEach { (name, t) -> inputs[name] = t }
 
-            languageModel.run(inputs).use { r ->
+            val result = languageModel.run(inputs)
+            var keep = false
+            try {
                 @Suppress("UNCHECKED_CAST")
-                val logits = r[0].value as Array<Array<FloatArray>>
+                val logits = result[0].value as Array<Array<FloatArray>>
                 val last = logits[0].last()
 
-                // Copy the cache out before the result is closed; the tensors
-                // are backed by native memory that is freed with it.
-                val present = HashMap<String, KvTensor>()
+                val present = HashMap<String, OnnxTensor>()
                 val names = languageModel.outputNames.toList()
                 for (i in 1 until names.size) {
-                    val t = r[i] as OnnxTensor
-                    val shape = t.info.shape.copyOf()
-                    val buf = t.floatBuffer
-                    val out = FloatArray(buf.remaining())
-                    buf.get(out)
                     present[names[i].replace("present", "past_key_values")] =
-                        KvTensor(out, shape)
+                        result[i] as OnnxTensor
                 }
-                return last to present
+                keep = true
+                // The result owns this memory, so it stays open until the
+                // cache it backs is replaced.
+                return last to KvCache(present, result)
+            } finally {
+                if (!keep) runCatching { result.close() }
             }
         } finally {
+            // Only the tensors created here; the cache belongs to its owner.
             toClose.forEach { runCatching { it.close() } }
         }
     }
@@ -372,18 +393,18 @@ class ChatterboxTts private constructor(
     }
 
     /** Zero-length cache for the first step: [1, heads, 0, head_dim]. */
-    private fun emptyCache(): Map<String, KvTensor> =
-        buildMap {
-            val shape = longArrayOf(1, NUM_KV_HEADS.toLong(), 0L, HEAD_DIM.toLong())
-            for (layer in 0 until NUM_HIDDEN_LAYERS) {
-                for (kv in listOf("key", "value")) {
-                    put(
-                        "past_key_values.$layer.$kv",
-                        KvTensor(FloatArray(0), shape.copyOf())
-                    )
-                }
+    private fun emptyCache(): KvCache {
+        val shape = longArrayOf(1, NUM_KV_HEADS.toLong(), 0L, HEAD_DIM.toLong())
+        val empty = FloatArray(0)
+        val map = HashMap<String, OnnxTensor>(NUM_HIDDEN_LAYERS * 2)
+        for (layer in 0 until NUM_HIDDEN_LAYERS) {
+            for (kv in listOf("key", "value")) {
+                map["past_key_values.$layer.$kv"] =
+                    OnnxTensor.createTensor(env, FloatBuffer.wrap(empty), shape.copyOf())
             }
         }
+        return KvCache(map, owner = null)
+    }
 
     private fun concatOnTime(
         a: Array<Array<FloatArray>>,
