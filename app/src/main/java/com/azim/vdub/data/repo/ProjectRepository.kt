@@ -6,7 +6,11 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.azim.vdub.audio.AudioExtractor
 import com.azim.vdub.audio.ClipCutter
+import com.azim.vdub.audio.ChatterboxTts
+import com.azim.vdub.audio.DubTimeline
 import com.azim.vdub.audio.EmotionClassifier
+import com.azim.vdub.audio.VideoMuxer
+import com.azim.vdub.audio.VoiceEngine
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
 import com.azim.vdub.core.VdubPaths
@@ -21,6 +25,7 @@ import com.azim.vdub.data.model.EmotionStyle
 import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.model.TranslatedScript
 import com.azim.vdub.data.model.TranslationSource
+import com.azim.vdub.data.model.EmotionStyle as Style
 import com.azim.vdub.data.model.SpeakerScript
 import com.azim.vdub.data.model.SrtCue
 import com.azim.vdub.data.model.VideoSource
@@ -788,6 +793,173 @@ class ProjectRepository @Inject constructor(
     /** Distinct speakers in the order they first appear. */
     suspend fun speakersOf(project: String): List<String> = withContext(Dispatchers.IO) {
         readSpeakerScript(project)?.lines.orEmpty().map { it.spk }.distinct()
+    }
+
+    // ------------------------------------------------------ Step 5: speaking
+
+    data class SpeakProgress(
+        val done: Int,
+        val total: Int,
+        val line: String,
+        val speaker: String
+    )
+
+    /**
+     * Speak every line in its speaker's cloned voice.
+     *
+     * Resumable: a line whose wav already exists is skipped, so a run
+     * interrupted after two hours continues instead of restarting. Speakers
+     * are enrolled once and reused, since encoding a reference is as expensive
+     * as generating a short line.
+     */
+    suspend fun speakAll(
+        project: String,
+        engineId: String,
+        onProgress: (SpeakProgress) -> Unit
+    ): Int = withContext(Dispatchers.Default) {
+        val script = readTranslatedScript(project)
+            ?: error("Run Step 4 (translation) first")
+        val lines = script.lines.filter { it.hi.isNotBlank() }
+        check(lines.isNotEmpty()) { "No translated lines to speak" }
+
+        VdubPaths.hiClipsDir(project).mkdirs()
+        val paths = VoiceEngine.pathsFor(engineId)
+
+        var spoken = 0
+        ChatterboxTts.open(paths).use { tts ->
+            val voices = HashMap<String, ChatterboxTts.SpeakerVoice>()
+
+            lines.forEachIndexed { index, line ->
+                coroutineContext.ensureActive()
+                val id = line.utt.removePrefix("line_").toIntOrNull() ?: index
+                val target = VdubPaths.hiClipFile(project, id)
+
+                onProgress(SpeakProgress(index, lines.size, line.hi.take(40), line.spk))
+
+                if (target.exists() && target.length() > WAV_MIN_BYTES) {
+                    spoken++
+                    return@forEachIndexed          // already done, resume past it
+                }
+
+                val voice = voices.getOrPut(line.spk) {
+                    val refs = referenceClipsFor(project, line.spk, limit = 1)
+                    val ref = refs.firstOrNull()
+                        ?: paths.defaultVoice.takeIf { it.exists() }
+                        ?: error("No reference audio for ${line.spk}")
+                    tts.enrol(ref)
+                }
+
+                val wav = tts.speak(
+                    text = line.hi,
+                    voice = voice,
+                    language = "hi",
+                    exaggeration = Style.exaggeration(line.emotion)
+                )
+                WavIo.writePcm16(
+                    target,
+                    floatsToPcm16(wav),
+                    ChatterboxTts.SAMPLE_RATE,
+                    1
+                )
+                spoken++
+            }
+        }
+        onProgress(SpeakProgress(lines.size, lines.size, "", ""))
+        if (spoken == lines.size) VdubPaths.markStepDone(project, 5)
+        spoken
+    }
+
+    /**
+     * Fit the spoken clips to the original timing and mux them onto the video.
+     *
+     * @param keepBackground mixes the original audio underneath, so music and
+     *        effects survive. Without separation this also leaves the original
+     *        dialogue faintly audible, which is why it defaults off.
+     */
+    suspend fun buildDubbedVideo(
+        project: String,
+        keepBackground: Boolean = false,
+        onProgress: (String, Float) -> Unit
+    ): File = withContext(Dispatchers.Default) {
+        val script = readTranslatedScript(project)
+            ?: error("Run Step 4 (translation) first")
+        val video = VdubPaths.inputVideo(project)
+        check(video.exists()) { "input_video.mp4 is missing" }
+
+        val sr = ChatterboxTts.SAMPLE_RATE
+        onProgress("Loading clips", 0f)
+
+        val clips = script.lines.mapNotNull { line ->
+            val id = line.utt.removePrefix("line_").toIntOrNull() ?: return@mapNotNull null
+            val f = VdubPaths.hiClipFile(project, id)
+            if (!f.exists() || f.length() <= WAV_MIN_BYTES) return@mapNotNull null
+            DubTimeline.Clip(id, line.start, line.end, readWavFloat(f))
+        }
+        check(clips.isNotEmpty()) { "No spoken clips yet — run Speak first" }
+
+        onProgress("Fitting timing", 0.2f)
+        val totalSec = script.lines.maxOf { it.end } + 2.0
+        val assembled = DubTimeline.assemble(clips, totalSec, sr)
+
+        var track = assembled.samples
+        if (keepBackground) {
+            onProgress("Mixing background", 0.35f)
+            val org = VdubPaths.orgAudio(project)
+            if (org.exists()) {
+                val bed = resampleLinear(readWavFloat(org), 16_000, sr)
+                track = DubTimeline.mix(track, bed)
+            }
+        }
+
+        onProgress("Writing video", 0.5f)
+        val out = VdubPaths.dubbedVideo(project)
+        VideoMuxer.mux(video, track, sr, out) { p ->
+            onProgress("Writing video", 0.5f + 0.5f * p)
+        }
+
+        VdubPaths.markStepDone(project, 6)
+        out
+    }
+
+    fun spokenClipCount(project: String): Int =
+        VdubPaths.hiClipsDir(project)
+            .listFiles { f -> f.extension == "wav" && f.length() > WAV_MIN_BYTES }
+            ?.size ?: 0
+
+    private fun readWavFloat(f: File): FloatArray {
+        val fmt = WavIo.readFormat(f)
+        val bytesPerFrame = fmt.channels * 2
+        val frames = (fmt.dataBytes / bytesPerFrame).toInt()
+        if (frames <= 0) return FloatArray(0)
+        val pcm = ByteArray(fmt.dataBytes.toInt())
+        java.io.RandomAccessFile(f, "r").use { raf ->
+            raf.seek(fmt.dataOffset)
+            raf.readFully(pcm)
+        }
+        val out = FloatArray(frames)
+        var p = 0
+        for (i in 0 until frames) {
+            var acc = 0
+            for (c in 0 until fmt.channels) {
+                val lo = pcm[p].toInt() and 0xFF
+                val hi = pcm[p + 1].toInt()
+                acc += (hi shl 8) or lo
+                p += 2
+            }
+            out[i] = (acc / fmt.channels) / 32768f
+        }
+        return out
+    }
+
+    private fun floatsToPcm16(samples: FloatArray): ByteArray {
+        val out = ByteArray(samples.size * 2)
+        var j = 0
+        for (s in samples) {
+            val v = (s.coerceIn(-1f, 1f) * 32767f).toInt()
+            out[j++] = (v and 0xFF).toByte()
+            out[j++] = ((v shr 8) and 0xFF).toByte()
+        }
+        return out
     }
 
     private fun srtTime(sec: Double): String {

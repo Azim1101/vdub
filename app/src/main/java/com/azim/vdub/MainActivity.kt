@@ -65,6 +65,7 @@ import com.azim.vdub.ui.EmotionModelCard
 import com.azim.vdub.ui.EmotionSection
 import com.azim.vdub.ui.AutoTranslateSection
 import com.azim.vdub.ui.NextStep4Button
+import com.azim.vdub.ui.FinalVideoSection
 import com.azim.vdub.ui.GenerateVoiceSection
 import com.azim.vdub.ui.NextStep5Button
 import com.azim.vdub.ui.SpeakerVoiceSection
@@ -561,8 +562,20 @@ fun Step5Screen(
                     ready = state.readyToSpeak,
                     busy = state.busy,
                     job = state.job,
-                    onSpeak = vm::speakNotReady,
+                    onSpeak = vm::speak,
                     onCancel = vm::cancel
+                )
+            }
+            item {
+                FinalVideoSection(
+                    allSpoken = state.allSpoken,
+                    canMux = state.canMux,
+                    keepBackground = state.keepBackground,
+                    dubbedVideoPath = state.dubbedVideoPath,
+                    busy = state.busy,
+                    job = state.job,
+                    onKeepBackground = vm::setKeepBackground,
+                    onBuild = vm::buildVideo
                 )
             }
             item { Spacer(Modifier.height(20.dp)) }

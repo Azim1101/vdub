@@ -46,6 +46,8 @@ data class Step5UiState(
     val translatedCount: Int = 0,
     val spokenCount: Int = 0,
     val step4Done: Boolean = false,
+    val dubbedVideoPath: String? = null,
+    val keepBackground: Boolean = false,
     val job: JobState = JobState.Idle,
     val message: String? = null
 ) {
@@ -56,7 +58,10 @@ data class Step5UiState(
         get() = engineInstalled && total > 0 && untranslated == 0 && !busy
 
     /** Rough wall-clock estimate: about a minute per line on a phone CPU. */
-    val estimateMinutes: Int get() = total
+    val estimateMinutes: Int get() = (total - spokenCount).coerceAtLeast(0)
+
+    val allSpoken: Boolean get() = total > 0 && spokenCount >= total
+    val canMux: Boolean get() = allSpoken && !busy
 }
 
 @HiltViewModel
@@ -110,8 +115,9 @@ class Step5ViewModel @Inject constructor(
                 lines = lines,
                 speakers = plans,
                 translatedCount = lines.count { l -> l.hi.isNotBlank() },
-                spokenCount = VdubPaths.hiClipsDir(project)
-                    .listFiles { f -> f.extension == "wav" }?.size ?: 0,
+                spokenCount = repo.spokenClipCount(project),
+                dubbedVideoPath = VdubPaths.dubbedVideo(project)
+                    .takeIf { f -> f.exists() && f.length() > 0 }?.absolutePath,
                 step4Done = VdubPaths.isStepDone(project, 4),
                 job = JobState.Idle
             )
@@ -152,17 +158,43 @@ class Step5ViewModel @Inject constructor(
 
     fun exaggerationFor(emotion: String) = EmotionStyle.exaggeration(emotion)
 
+    fun setKeepBackground(on: Boolean) = _state.update { it.copy(keepBackground = on) }
+
     /**
-     * Synthesis is not implemented yet. Say so rather than starting a job that
-     * cannot finish — the user has just downloaded up to 1.5 GB and deserves a
-     * straight answer about what does and does not work.
+     * Speak every line. Resumable — clips already on disk are skipped, so an
+     * interrupted multi-hour run continues rather than starting over.
      */
-    fun speakNotReady() {
+    fun speak() = launchJob("Speaking") {
+        val project = _state.value.projectName
+        val spoken = repo.speakAll(project, _state.value.engineId) { p ->
+            progress(
+                "Speaking",
+                if (p.total > 0) p.done.toFloat() / p.total else -1f,
+                buildString {
+                    append("${p.done} / ${p.total}")
+                    if (p.speaker.isNotBlank()) append("  ·  ${p.speaker}")
+                    if (p.line.isNotBlank()) append("  ·  ${p.line}")
+                }
+            )
+        }
         _state.update {
             it.copy(
-                message = "Speech generation is not wired up yet. Everything it " +
-                    "needs is ready — engine, reference clips, Hindi text and " +
-                    "emotion — but the inference loop is the next piece of work."
+                spokenCount = repo.spokenClipCount(project),
+                job = JobState.Done("Speech ready", "$spoken clips")
+            )
+        }
+    }
+
+    /** Fit the clips to the original timing and write dubbed_video.mp4. */
+    fun buildVideo() = launchJob("Building video") {
+        val project = _state.value.projectName
+        val out = repo.buildDubbedVideo(project, _state.value.keepBackground) { label, p ->
+            progress(label, p, "")
+        }
+        _state.update {
+            it.copy(
+                dubbedVideoPath = out.absolutePath,
+                job = JobState.Done("Dubbed video ready", out.name)
             )
         }
     }

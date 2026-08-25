@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -23,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -298,6 +300,125 @@ fun GenerateVoiceSection(
                         .fillMaxWidth()
                         .height(8.dp)
                         .clip(RoundedCornerShape(4.dp))
+                )
+            }
+            else -> Unit
+        }
+    }
+}
+
+/** Final step: fit timing, mux, preview. */
+@Composable
+fun FinalVideoSection(
+    allSpoken: Boolean,
+    canMux: Boolean,
+    keepBackground: Boolean,
+    dubbedVideoPath: String?,
+    busy: Boolean,
+    job: JobState,
+    onKeepBackground: (Boolean) -> Unit,
+    onBuild: () -> Unit
+) {
+    SectionCard(
+        number = "3",
+        title = "Dubbed video",
+        subtitle = dubbedVideoPath?.let { "dubbed_video.mp4 ready" }
+            ?: "Fit timing and write the final file",
+        done = dubbedVideoPath != null
+    ) {
+        Text(
+            "Each clip is fitted to its original slot — sped up to 2× if the " +
+                "Hindi runs long, without changing pitch. The video track is " +
+                "copied, not re-encoded, so nothing is lost and it takes seconds.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = keepBackground,
+                onCheckedChange = onKeepBackground,
+                enabled = !busy
+            )
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Keep background audio", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Music and effects survive — but the original dialogue stays " +
+                        "faintly audible too, since there is no separation step yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (!allSpoken) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Speak all the lines first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onBuild,
+            enabled = canMux,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(Icons.Default.Movie, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (dubbedVideoPath != null) "Rebuild video" else "Build dubbed video")
+        }
+
+        dubbedVideoPath?.let {
+            Spacer(Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    "✓ $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(10.dp)
+                )
+            }
+        }
+
+        when (job) {
+            is JobState.Running -> if (
+                job.label.startsWith("Building") || job.label.startsWith("Writing") ||
+                job.label.startsWith("Fitting") || job.label.startsWith("Loading") ||
+                job.label.startsWith("Mixing")
+            ) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(job.label, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { job.progress.coerceAtLeast(0f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                )
+            }
+            is JobState.Failed -> {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "✗ ${job.error}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
             else -> Unit
