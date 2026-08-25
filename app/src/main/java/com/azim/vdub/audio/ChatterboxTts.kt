@@ -118,19 +118,30 @@ class ChatterboxTts private constructor(
      */
     fun enrol(referenceWav: File): SpeakerVoice {
         val audio = readWav24kMono(referenceWav)
-        require(audio.isNotEmpty()) { "${referenceWav.name} is empty" }
+        // Below about a second the encoder emits an empty prompt, which then
+        // fails deep inside the decoder as a zero-dimension error rather than
+        // as "this clip is too short".
+        require(audio.size >= SAMPLE_RATE) {
+            "${referenceWav.name} is only %.1f s — need at least 1 s of speech to clone a voice"
+                .format(audio.size.toDouble() / SAMPLE_RATE)
+        }
 
         OnnxTensor.createTensor(
             env, FloatBuffer.wrap(audio), longArrayOf(1, audio.size.toLong())
         ).use { tensor ->
             speechEncoder.run(mapOf(inputName(speechEncoder, 0) to tensor)).use { r ->
                 @Suppress("UNCHECKED_CAST")
-                return SpeakerVoice(
+                val voice = SpeakerVoice(
                     condEmb = r[0].value as Array<Array<FloatArray>>,
                     promptToken = toLong2D(r[1].value),
                     refXVector = r[2].value as Array<FloatArray>,
                     promptFeat = r[3].value as Array<Array<FloatArray>>
                 )
+                check(voice.condEmb[0].isNotEmpty() && voice.promptFeat[0].isNotEmpty()) {
+                    "${referenceWav.name} produced no speaker conditioning — " +
+                        "the clip is probably silence"
+                }
+                return voice
             }
         }
     }
@@ -227,11 +238,22 @@ class ChatterboxTts private constructor(
         }
     }
 
+    /**
+     * KV cache entry held flat.
+     *
+     * The nested-array form cannot express an empty cache: ORT infers the
+     * shape from the arrays, and the first step needs [1, heads, 0, dim],
+     * which it rejects as "zero dimension". A buffer with an explicit shape
+     * carries the zero fine — and avoids rebuilding 60 nested arrays per
+     * token, which at ~1000 steps a line is not free either.
+     */
+    private class KvTensor(val data: FloatArray, val shape: LongArray)
+
     private fun runLanguageModel(
         embeds: Array<Array<FloatArray>>,
         attention: LongArray,
-        past: Map<String, Array<Array<Array<FloatArray>>>>
-    ): Pair<FloatArray, Map<String, Array<Array<Array<FloatArray>>>>> {
+        past: Map<String, KvTensor>
+    ): Pair<FloatArray, Map<String, KvTensor>> {
         val seq = embeds[0].size
         val hidden = embeds[0][0].size
         val flat = FloatArray(seq * hidden)
@@ -252,8 +274,8 @@ class ChatterboxTts private constructor(
                 env, LongBuffer.wrap(attention), longArrayOf(1, attention.size.toLong())
             ).also { toClose.add(it); inputs["attention_mask"] = it }
 
-            past.forEach { (name, value) ->
-                OnnxTensor.createTensor(env, value)
+            past.forEach { (name, kv) ->
+                OnnxTensor.createTensor(env, FloatBuffer.wrap(kv.data), kv.shape)
                     .also { toClose.add(it); inputs[name] = it }
             }
 
@@ -262,12 +284,18 @@ class ChatterboxTts private constructor(
                 val logits = r[0].value as Array<Array<FloatArray>>
                 val last = logits[0].last()
 
-                val present = HashMap<String, Array<Array<Array<FloatArray>>>>()
+                // Copy the cache out before the result is closed; the tensors
+                // are backed by native memory that is freed with it.
+                val present = HashMap<String, KvTensor>()
                 val names = languageModel.outputNames.toList()
                 for (i in 1 until names.size) {
-                    @Suppress("UNCHECKED_CAST")
-                    val v = r[i].value as Array<Array<Array<FloatArray>>>
-                    present[names[i].replace("present", "past_key_values")] = v
+                    val t = r[i] as OnnxTensor
+                    val shape = t.info.shape.copyOf()
+                    val buf = t.floatBuffer
+                    val out = FloatArray(buf.remaining())
+                    buf.get(out)
+                    present[names[i].replace("present", "past_key_values")] =
+                        KvTensor(out, shape)
                 }
                 return last to present
             }
@@ -277,11 +305,31 @@ class ChatterboxTts private constructor(
     }
 
     private fun runDecoder(speechTokens: LongArray, voice: SpeakerVoice): FloatArray {
+        require(speechTokens.isNotEmpty()) { "no speech tokens to decode" }
+
+        // Flatten rather than passing nested arrays: ORT infers shapes from
+        // those and rejects any zero-length axis, which a short prompt can
+        // produce.
+        val xv = voice.refXVector[0]
+        val featRows = voice.promptFeat[0]
+        val featDim = featRows.firstOrNull()?.size ?: 0
+        val featFlat = FloatArray(featRows.size * featDim)
+        var fk = 0
+        for (row in featRows) {
+            row.copyInto(featFlat, fk)
+            fk += featDim
+        }
+
         OnnxTensor.createTensor(
             env, LongBuffer.wrap(speechTokens), longArrayOf(1, speechTokens.size.toLong())
         ).use { tokens ->
-            OnnxTensor.createTensor(env, voice.refXVector).use { spk ->
-                OnnxTensor.createTensor(env, voice.promptFeat).use { feat ->
+            OnnxTensor.createTensor(
+                env, FloatBuffer.wrap(xv), longArrayOf(1, xv.size.toLong())
+            ).use { spk ->
+                OnnxTensor.createTensor(
+                    env, FloatBuffer.wrap(featFlat),
+                    longArrayOf(1, featRows.size.toLong(), featDim.toLong())
+                ).use { feat ->
                     conditionalDecoder.run(
                         mapOf(
                             "speech_tokens" to tokens,
@@ -323,13 +371,15 @@ class ChatterboxTts private constructor(
         return bestIdx.toLong()
     }
 
-    private fun emptyCache(): Map<String, Array<Array<Array<FloatArray>>>> =
+    /** Zero-length cache for the first step: [1, heads, 0, head_dim]. */
+    private fun emptyCache(): Map<String, KvTensor> =
         buildMap {
+            val shape = longArrayOf(1, NUM_KV_HEADS.toLong(), 0L, HEAD_DIM.toLong())
             for (layer in 0 until NUM_HIDDEN_LAYERS) {
                 for (kv in listOf("key", "value")) {
                     put(
                         "past_key_values.$layer.$kv",
-                        Array(1) { Array(NUM_KV_HEADS) { Array(0) { FloatArray(HEAD_DIM) } } }
+                        KvTensor(FloatArray(0), shape.copyOf())
                     )
                 }
             }
