@@ -76,8 +76,7 @@ object ModelCatalog {
 
     enum class Kind { ONNX, ONNX_DATA, JSON, TEXT, BIN }
 
-    /** Same as [hf]; named separately only for readability at the call sites. */
-    private fun hfx(repo: String, path: String): List<String> = hf(repo, path)
+    private const val CB_Q4 = "verify01234/chatterbox-multilingual-ONNX-q4"
 
     private fun hf(repo: String, path: String): List<String> = listOf(
         "https://huggingface.co/$repo/resolve/main/$path?download=true",
@@ -217,80 +216,89 @@ object ModelCatalog {
      * this format — see [runtime].
      */
     /**
-     * Chatterbox Multilingual — ONNX export, the runnable path to voice cloning.
+     * Chatterbox Multilingual — Q4 ONNX, the runnable voice-cloning path.
      *
-     * Same model family as the project's own lite repo, but exported to ONNX by
-     * onnx-community, so ONNX Runtime Mobile can actually execute it. Hindi is
-     * one of its 23 languages, cloning is zero-shot from the speaker's own
-     * clip, and it has the exaggeration control the Step 3 emotion feeds.
+     * Same model family as the project's lite repo, but a real ONNX export so
+     * ONNX Runtime Mobile can execute it. Hindi is one of its 23 languages,
+     * cloning is zero-shot from the speaker's own clip, and the exaggeration
+     * control is what Step 3's emotion labels feed.
      *
-     * Four graphs run in sequence: embed_tokens -> language_model (q4) ->
-     * speech_encoder -> conditional_decoder. Weights live in .onnx_data
-     * sidecars, which must sit next to their .onnx file.
+     * This q4 build is single-file: the upstream export splits weights into
+     * .onnx_data sidecars that must sit beside their graph, which is fragile
+     * on Android storage. Here each graph is self-contained, and the whole set
+     * is 790 MB instead of 1.45 GB.
+     *
+     * Four graphs run in sequence:
+     *   embed_tokens -> language_model -> speech_encoder -> conditional_decoder
+     *
+     * Generation must use repetition_penalty 1.2 — the upstream default of 2.0
+     * sends this quantized build into an infinite loop.
      */
     val CHATTERBOX_ONNX = Model(
         id = "chatterbox_onnx",
         name = "Chatterbox Multilingual (voice cloning)",
         stage = Stage.TTS,
-        sizeBytes = 1_555_000_000L,
+        sizeBytes = 830_000_000L,
         description = "Clones each speaker from their own clips and speaks the " +
             "Hindi lines. Zero-shot — no training, no reference text.",
         license = "MIT (ResembleAI) — output carries a PerTh watermark",
-        note = "Largest download. Runs the language model in q4 to keep RAM near " +
-            "1.5 GB; expect roughly a minute per line on a phone CPU.",
+        note = "Q4 single-file build. Roughly 1 GB RAM and about a minute per " +
+            "line on a phone CPU.",
         files = listOf(
             ModelFile(
                 localName = "chatterbox/embed_tokens.onnx",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/embed_tokens.onnx"),
-                approxBytes = 13_286L
+                urls = hf(CB_Q4, "onnx/embed_tokens.onnx"),
+                approxBytes = 68_420_479L
             ),
             ModelFile(
-                localName = "chatterbox/embed_tokens.onnx_data",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/embed_tokens.onnx_data"),
-                approxBytes = 68_390_912L,
-                kind = Kind.ONNX_DATA
-            ),
-            ModelFile(
-                localName = "chatterbox/language_model_q4.onnx",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/language_model_q4.onnx"),
-                approxBytes = 227_911L
-            ),
-            ModelFile(
-                localName = "chatterbox/language_model_q4.onnx_data",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/language_model_q4.onnx_data"),
-                approxBytes = 353_621_248L,
-                kind = Kind.ONNX_DATA
+                localName = "chatterbox/language_model.onnx",
+                urls = hf(CB_Q4, "onnx/language_model.onnx"),
+                approxBytes = 353_810_438L
             ),
             ModelFile(
                 localName = "chatterbox/speech_encoder.onnx",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/speech_encoder.onnx"),
-                approxBytes = 1_184_608L
-            ),
-            ModelFile(
-                localName = "chatterbox/speech_encoder.onnx_data",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/speech_encoder.onnx_data"),
-                approxBytes = 591_274_880L,
-                kind = Kind.ONNX_DATA
+                urls = hf(CB_Q4, "onnx/speech_encoder.onnx"),
+                approxBytes = 180_077_492L
             ),
             ModelFile(
                 localName = "chatterbox/conditional_decoder.onnx",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/conditional_decoder.onnx"),
-                approxBytes = 6_350_448L
-            ),
-            ModelFile(
-                localName = "chatterbox/conditional_decoder.onnx_data",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/conditional_decoder.onnx_data"),
-                approxBytes = 533_970_816L,
-                kind = Kind.ONNX_DATA
+                urls = hf(CB_Q4, "onnx/conditional_decoder.onnx"),
+                approxBytes = 225_572_798L
             ),
             ModelFile(
                 localName = "chatterbox/tokenizer.json",
-                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "tokenizer.json"),
-                approxBytes = 25_470L,
+                urls = hf(CB_Q4, "tokenizer.json"),
+                approxBytes = 71_798L,
                 kind = Kind.JSON
+            ),
+            ModelFile(
+                localName = "chatterbox/tokenizer_config.json",
+                urls = hf(CB_Q4, "tokenizer_config.json"),
+                approxBytes = 244L,
+                kind = Kind.JSON
+            ),
+            ModelFile(
+                localName = "chatterbox/generation_config.json",
+                urls = hf(CB_Q4, "generation_config.json"),
+                approxBytes = 93L,
+                kind = Kind.JSON
+            ),
+            // Needed to tokenize Chinese source text; also the fallback voice
+            // when a speaker's own clips are unusable.
+            ModelFile(
+                localName = "chatterbox/Cangjie5_TC.json",
+                urls = hf(CB_Q4, "Cangjie5_TC.json"),
+                approxBytes = 1_920_163L,
+                kind = Kind.JSON
+            ),
+            ModelFile(
+                localName = "chatterbox/default_voice.wav",
+                urls = hf(CB_Q4, "default_voice.wav"),
+                approxBytes = 714_320L,
+                kind = Kind.BIN
             )
         ),
-        runtimeRamBytes = 1_500_000_000L
+        runtimeRamBytes = 1_100_000_000L
     )
 
     val CHATTERBOX_HI = Model(

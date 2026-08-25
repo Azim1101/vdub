@@ -38,6 +38,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.coroutineContext
 
+private const val WAV_MIN_BYTES = 44L + 16_000 * 2 * 1   // header + ~1 s at 16 kHz
+
 @Singleton
 class ProjectRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -760,6 +762,33 @@ class ProjectRepository @Inject constructor(
                 json.decodeFromString(TranslatedScript.serializer(), f.readText())
             }.getOrNull()
         }
+
+    /**
+     * Reference clips for a speaker, longest first.
+     *
+     * Zero-shot cloning quality depends heavily on the reference: a two-word
+     * clip carries almost no timbre. Step 5 should enrol from the longest few
+     * rather than whichever line happens to be first.
+     */
+    suspend fun referenceClipsFor(
+        project: String,
+        speaker: String,
+        limit: Int = 3
+    ): List<File> = withContext(Dispatchers.IO) {
+        val lines = readSpeakerScript(project)?.lines.orEmpty()
+            .filter { it.spk == speaker }
+        lines.sortedByDescending { it.end - it.start }
+            .asSequence()
+            .map { File(VdubPaths.clipsDir(project), it.utt + ".wav") }
+            .filter { it.exists() && it.length() > WAV_MIN_BYTES }
+            .take(limit)
+            .toList()
+    }
+
+    /** Distinct speakers in the order they first appear. */
+    suspend fun speakersOf(project: String): List<String> = withContext(Dispatchers.IO) {
+        readSpeakerScript(project)?.lines.orEmpty().map { it.spk }.distinct()
+    }
 
     private fun srtTime(sec: Double): String {
         val ms = (sec * 1000).toLong().coerceAtLeast(0)

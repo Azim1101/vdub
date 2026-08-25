@@ -96,6 +96,18 @@ class ModelCatalogTest {
         assertTrue(cb.ramBytes > 1_500_000_000L)
     }
 
+    /**
+     * The voice stage is the only one that runs after translation, so it must
+     * be reachable: a required, runnable model in the TTS stage.
+     */
+    @Test
+    fun `pipeline has a runnable model for every required stage`() {
+        ModelCatalog.Stage.entries.forEach { stage ->
+            val usable = ModelCatalog.forStage(stage).filter { it.runnable }
+            assertTrue("no runnable model for $stage", usable.isNotEmpty())
+        }
+    }
+
     /** Sizes must not silently drift from what is really hosted. */
     @Test
     fun `chatterbox onnx totals roughly its declared size`() {
@@ -147,14 +159,13 @@ class ModelCatalogTest {
     }
 
     /**
-     * ONNX external-data sidecars are raw weights, not protobuf, so they must
-     * not be validated as ONNX or every large model would fail to install.
+     * If a sidecar is ever reintroduced it must be typed as data — it holds raw
+     * weights, not protobuf, so the ONNX header check would reject it.
      */
     @Test
     fun `onnx data sidecars are typed as data`() {
         ModelCatalog.ALL.flatMap { it.files }
             .filter { it.localName.endsWith(".onnx_data") }
-            .also { assertTrue("expected sidecars", it.isNotEmpty()) }
             .forEach { assertEquals(it.localName, ModelCatalog.Kind.ONNX_DATA, it.kind) }
     }
 
@@ -167,6 +178,30 @@ class ModelCatalogTest {
                 val graph = data.removeSuffix("_data")
                 assertTrue("$data has no $graph", names.contains(graph))
             }
+        }
+    }
+
+    /**
+     * The voice model is deliberately the single-file q4 build: external-data
+     * sidecars must sit beside their graph, which is fragile on Android
+     * storage and doubles the download.
+     */
+    @Test
+    fun `voice model needs no external data files`() {
+        val m = ModelCatalog.byId("chatterbox_onnx")!!
+        assertTrue(m.files.none { it.localName.endsWith(".onnx_data") })
+        assertTrue(m.files.any { it.localName.endsWith("language_model.onnx") })
+    }
+
+    /** The four graphs the pipeline runs in sequence must all be present. */
+    @Test
+    fun `voice model ships all four graphs and its tokenizer`() {
+        val names = ModelCatalog.byId("chatterbox_onnx")!!.files.map { it.localName }
+        listOf(
+            "embed_tokens.onnx", "language_model.onnx",
+            "speech_encoder.onnx", "conditional_decoder.onnx", "tokenizer.json"
+        ).forEach { needed ->
+            assertTrue("missing $needed", names.any { it.endsWith(needed) })
         }
     }
 

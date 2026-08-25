@@ -99,6 +99,14 @@ object VdubPaths {
     fun clipFile(project: String, index: Int) =
         File(clipsDir(project), "line_%04d.wav".format(index))
 
+    /** Step 5 output: one spoken wav per line. */
+    fun hiClipsDir(project: String) = File(projectDir(project), "hi_clips")
+    fun hiClipFile(project: String, index: Int) =
+        File(hiClipsDir(project), "line_%04d.wav".format(index))
+
+    /** Final muxed video. */
+    fun dubbedVideo(project: String) = File(projectDir(project), "dubbed_video.mp4")
+
     fun outDir(project: String) = File(projectDir(project), "out")
     fun scriptRaw(project: String) = File(outDir(project), "script_raw.json")
     fun scriptSpeakers(project: String) = File(outDir(project), "script_speakers.json")
