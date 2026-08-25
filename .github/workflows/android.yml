@@ -127,24 +127,38 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # Free space first: the emulator image plus the build outputs routinely
+      # exhaust a runner's disk, and it surfaces as an unexplained boot failure.
+      - name: Free disk space
+        if: success()
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk \
+                      /opt/ghc /usr/local/share/boost || true
+          df -h / | tail -1
+
       - name: Instrumented tests
         if: success()
         id: instrumented
         continue-on-error: true
+        timeout-minutes: 35
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          # default (AOSP) boots faster and smaller than google_apis, and
+          # nothing here needs Play services
+          target: default
           arch: x86_64
-          profile: pixel_5
-          ram-size: 4096M
+          force-avd-creation: false
           disable-animations: true
+          emulator-boot-timeout: 900
           emulator-options: >-
-            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-            -camera-back none
+            -no-snapshot-save -no-window -gpu swiftshader_indirect
+            -noaudio -no-boot-anim -camera-back none
           script: |
             set -o pipefail
-            ./gradlew connectedDebugAndroidTest --stacktrace 2>&1 | tee /tmp/instr.log
+            adb devices
+            ./gradlew connectedDebugAndroidTest --stacktrace 2>&1 \
+              | tee "$GITHUB_WORKSPACE/instr.log"
 
       - name: Report instrumented result
         if: always()
@@ -159,6 +173,10 @@ jobs:
               echo
               echo '```'
               python3 .github/scripts/report_instrumented.py 2>&1 | head -120
+              echo
+              echo "--- emulator/gradle log ---"
+              tail -50 "$GITHUB_WORKSPACE/instr.log" 2>/dev/null \
+                || echo "(no log: the emulator never started the script)"
               echo '```'
             } > /tmp/instr.md
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \

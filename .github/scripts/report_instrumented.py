@@ -31,7 +31,9 @@ def main() -> None:
     if total == 0:
         print("No test XML found — the run failed before tests started.")
         try:
-            with open("/tmp/instr.log", encoding="utf-8", errors="replace") as fh:
+            import os
+            log = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "instr.log")
+            with open(log, encoding="utf-8", errors="replace") as fh:
                 tail = fh.read().splitlines()[-60:]
             print("\n".join(tail))
         except OSError:
