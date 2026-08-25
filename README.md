@@ -318,6 +318,16 @@ upgrade, and models are looked up in **both** roots.
 rehydrates from whatever actually exists in the folder, so state survives a
 reinstall or DB loss — not just an app restart.
 
+**The app also reopens where you left off.** The last project is remembered and
+the shell lands on the first unfinished step, read from those markers — no
+pressing Next through work that is already done. A banner explains the jump.
+
+**Long jobs keep running with the screen off.** Trim, embedding, emotion and
+speaking run under a foreground service holding a partial wake lock; without
+one Android suspends the process at lock and a three-hour run silently stalls.
+Progress appears in the notification, and speaking skips clips already on disk,
+so an interrupted run continues rather than restarting.
+
 ---
 
 ## Source layout
