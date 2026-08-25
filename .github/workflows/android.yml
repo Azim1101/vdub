@@ -164,9 +164,17 @@ jobs:
           # `echo no`, consumed the answer without creating anything — the
           # emulator then died on "Unknown AVD name". Feed it a stream that
           # cannot run out, and verify the AVD exists before booting.
-          yes "" | "$SDK/cmdline-tools/latest/bin/avdmanager" --silent create avd \
-            -n ci -k "system-images;android-30;default;x86_64" \
-            -d pixel_5 --force
+          # --silent hid avdmanager's own error, so the only symptom was the
+          # missing AVD one stage later. Let it speak, and give it a real "no"
+          # on stdin rather than a pipe it can outlive.
+          printf 'no\n' > /tmp/avd-answer
+          "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n ci -k "system-images;android-30;default;x86_64" --force \
+            < /tmp/avd-answer || {
+              echo "avdmanager exited $?"
+              ls -la "$HOME/.android/avd" 2>&1 || true
+              exit 1
+            }
           "$SDK/emulator/emulator" -list-avds
           "$SDK/emulator/emulator" -list-avds | grep -qx ci \
             || { echo "AVD 'ci' was not created"; exit 1; }
