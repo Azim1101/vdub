@@ -14,7 +14,8 @@ video → subtitles → per-line clips → speakers → emotion → translation 
 | 2 | Speaker diarization (CAM++) | ✅ done |
 | 3 | Emotion detection (emotion2vec+) | ✅ done |
 | 4 | Translation (NLLB-200) | model wired, stage next |
-| 5 | Voice + mux (Chatterbox) | two engines wired, stage next |
+| 5 | Voice cloning + speech | ✅ done |
+| 6 | Timing fit + video mux | ✅ done |
 
 ---
 
@@ -242,6 +243,38 @@ silent at the voice stage. Individual lines can be fixed by hand.
 Auto-translate with NLLB is present but says plainly that the on-device stage is
 not wired up yet.
 
+## Steps 5 & 6 — Speech and the dubbed video
+
+**Speak** turns every translated line into audio in its speaker's cloned voice.
+**Build** fits those clips to the original timing and writes `dubbed_video.mp4`.
+
+Four graphs run per line:
+
+| Graph | Job |
+|---|---|
+| `speech_encoder` | reference clip → speaker identity |
+| `embed_tokens` | tokens → embeddings, emotion applied as exaggeration |
+| `language_model` | speech tokens, autoregressive with a 30-layer KV cache |
+| `conditional_decoder` | tokens → 24 kHz waveform |
+
+**Timing is fitted by overlap-add, not resampling.** Hindi rarely matches the
+source duration, and resampling a line to fit raises its pitch — at 2× a 220 Hz
+tone measures 878 Hz, a chipmunk. The overlap-add path holds it within 7% while
+hitting the target duration exactly. Lines that still do not fit overflow and
+are reported rather than being cut mid-word, and a long line can never stamp
+over the next one's opening words.
+
+**The mux copies the video track verbatim** and encodes only the new audio, so a
+142 MB file takes seconds and loses no quality.
+
+**Speaking is resumable.** Clips already on disk are skipped, which matters when
+190 lines take roughly three hours. Speakers are enrolled once and reused.
+
+The tokenizer is byte-level BPE read from `tokenizer.json` — there is no
+`transformers` at run time. Text is NFKD-normalised first, matching the export;
+without it Devanagari matras land on the wrong tokens and the audio is
+mispronounced rather than failing outright.
+
 ## URL download
 
 There is no helper server. `VideoResolver` runs in the app:
@@ -352,5 +385,8 @@ CI builds the APK on every push and republishes the `step1-latest` release.
   `safetensors`; converting to ONNX requires a PyTorch export step that cannot
   run on a phone.
 - **NLLB is CC-BY-NC** — non-commercial use only.
-- Steps 4 and 5 have their models wired into the catalog but the stages
-  themselves are not built yet.
+- **No background separation yet.** "Keep background audio" mixes the original
+  track underneath so music and effects survive, but the original dialogue stays
+  faintly audible with it. Off by default. Proper separation needs TIGER-DnR,
+  which has no ONNX export.
+- **Auto-translation is still not wired** — upload a translated SRT or JSON.
