@@ -136,28 +136,43 @@ jobs:
                       /opt/ghc /usr/local/share/boost || true
           df -h / | tail -1
 
+      # Set up the emulator by hand rather than via the action: its failures
+      # arrive as a bare "exit code 2", and this workspace cannot read Actions
+      # logs, so each stage has to report for itself.
       - name: Instrumented tests
         if: success()
         id: instrumented
         continue-on-error: true
         timeout-minutes: 35
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          # default (AOSP) boots faster and smaller than google_apis, and
-          # nothing here needs Play services
-          target: default
-          arch: x86_64
-          disable-animations: true
-          emulator-boot-timeout: 900
-          emulator-options: >-
-            -no-snapshot-save -no-window -gpu swiftshader_indirect
-            -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -o pipefail
-            adb devices
-            ./gradlew connectedDebugAndroidTest --stacktrace 2>&1 \
-              | tee "$GITHUB_WORKSPACE/instr.log"
+        run: |
+          set -x
+          LOG="$GITHUB_WORKSPACE/instr.log"
+          exec > >(tee -a "$LOG") 2>&1
+
+          echo "== sdk =="
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+
+          echo "== install image =="
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "system-images;android-30;default;x86_64" "platform-tools" "emulator"
+
+          echo "== create avd =="
+          echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n ci -k "system-images;android-30;default;x86_64" --force
+
+          echo "== boot =="
+          "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
+            -noaudio -no-boot-anim -no-snapshot -camera-back none &
+          "$SDK/platform-tools/adb" wait-for-device
+          # wait-for-device returns at the daemon, not at a usable system
+          timeout 600 "$SDK/platform-tools/adb" shell \
+            'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done'
+          "$SDK/platform-tools/adb" devices
+
+          echo "== test =="
+          ./gradlew connectedDebugAndroidTest --stacktrace
 
       - name: Report instrumented result
         if: always()
@@ -173,9 +188,9 @@ jobs:
               echo '```'
               python3 .github/scripts/report_instrumented.py 2>&1 | head -120
               echo
-              echo "--- emulator/gradle log ---"
-              tail -50 "$GITHUB_WORKSPACE/instr.log" 2>/dev/null \
-                || echo "(no log: the emulator never started the script)"
+              echo "--- last 80 log lines ---"
+              tail -80 "$GITHUB_WORKSPACE/instr.log" 2>/dev/null \
+                || echo "(no log at all: the step died before writing one)"
               echo '```'
             } > /tmp/instr.md
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
