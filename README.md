@@ -187,6 +187,28 @@ sad 0.9×.
 
 ---
 
+## Step 4 — Translation
+
+**Uploading your own translation is the primary path** — it skips machine
+translation entirely, so nothing is downloaded and no model runs.
+
+| Upload | Matched by | Use when |
+|---|---|---|
+| **SRT** | time overlap | you have a subtitle file from anywhere |
+| **JSON** | `utt` | you exported from here and filled in `hi` |
+
+SRT is matched by overlap so a translator's file needn't share our line
+boundaries; JSON is matched by id so re-timing cannot misalign it. Export is
+offered in both formats.
+
+**A partial upload is reported, not hidden.** Lines with no match stay blank,
+the count says how many are missing, and `S04.done` is only written when every
+line has text — otherwise a half-covered SRT would pass and those lines would go
+silent at the voice stage. Individual lines can be fixed by hand.
+
+Auto-translate with NLLB is present but says plainly that the on-device stage is
+not wired up yet.
+
 ## URL download
 
 There is no helper server. `VideoResolver` runs in the app:
