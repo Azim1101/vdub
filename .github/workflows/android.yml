@@ -156,11 +156,20 @@ jobs:
 
           echo "== install image =="
           "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-            "system-images;android-30;default;x86_64" "platform-tools" "emulator"
+            "system-images;android-30;default;x86_64" "platform-tools" "emulator" \
+            | grep -v "Unzipping\|^\[=" || true
 
           echo "== create avd =="
-          echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n ci -k "system-images;android-30;default;x86_64" --force
+          # avdmanager asks about a custom hardware profile and, piped from
+          # `echo no`, consumed the answer without creating anything — the
+          # emulator then died on "Unknown AVD name". Feed it a stream that
+          # cannot run out, and verify the AVD exists before booting.
+          yes "" | "$SDK/cmdline-tools/latest/bin/avdmanager" --silent create avd \
+            -n ci -k "system-images;android-30;default;x86_64" \
+            -d pixel_5 --force
+          "$SDK/emulator/emulator" -list-avds
+          "$SDK/emulator/emulator" -list-avds | grep -qx ci \
+            || { echo "AVD 'ci' was not created"; exit 1; }
 
           echo "== boot =="
           "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
