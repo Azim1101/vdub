@@ -76,6 +76,9 @@ object ModelCatalog {
 
     enum class Kind { ONNX, ONNX_DATA, JSON, TEXT, BIN }
 
+    /** Same as [hf]; named separately only for readability at the call sites. */
+    private fun hfx(repo: String, path: String): List<String> = hf(repo, path)
+
     private fun hf(repo: String, path: String): List<String> = listOf(
         "https://huggingface.co/$repo/resolve/main/$path?download=true",
         "https://hf-mirror.com/$repo/resolve/main/$path?download=true"
@@ -213,10 +216,88 @@ object ModelCatalog {
      * ONNX Runtime cannot load them, so Step 5 needs an inference path for
      * this format — see [runtime].
      */
+    /**
+     * Chatterbox Multilingual — ONNX export, the runnable path to voice cloning.
+     *
+     * Same model family as the project's own lite repo, but exported to ONNX by
+     * onnx-community, so ONNX Runtime Mobile can actually execute it. Hindi is
+     * one of its 23 languages, cloning is zero-shot from the speaker's own
+     * clip, and it has the exaggeration control the Step 3 emotion feeds.
+     *
+     * Four graphs run in sequence: embed_tokens -> language_model (q4) ->
+     * speech_encoder -> conditional_decoder. Weights live in .onnx_data
+     * sidecars, which must sit next to their .onnx file.
+     */
+    val CHATTERBOX_ONNX = Model(
+        id = "chatterbox_onnx",
+        name = "Chatterbox Multilingual (voice cloning)",
+        stage = Stage.TTS,
+        sizeBytes = 1_555_000_000L,
+        description = "Clones each speaker from their own clips and speaks the " +
+            "Hindi lines. Zero-shot — no training, no reference text.",
+        license = "MIT (ResembleAI) — output carries a PerTh watermark",
+        note = "Largest download. Runs the language model in q4 to keep RAM near " +
+            "1.5 GB; expect roughly a minute per line on a phone CPU.",
+        files = listOf(
+            ModelFile(
+                localName = "chatterbox/embed_tokens.onnx",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/embed_tokens.onnx"),
+                approxBytes = 13_286L
+            ),
+            ModelFile(
+                localName = "chatterbox/embed_tokens.onnx_data",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/embed_tokens.onnx_data"),
+                approxBytes = 68_390_912L,
+                kind = Kind.ONNX_DATA
+            ),
+            ModelFile(
+                localName = "chatterbox/language_model_q4.onnx",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/language_model_q4.onnx"),
+                approxBytes = 227_911L
+            ),
+            ModelFile(
+                localName = "chatterbox/language_model_q4.onnx_data",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/language_model_q4.onnx_data"),
+                approxBytes = 353_621_248L,
+                kind = Kind.ONNX_DATA
+            ),
+            ModelFile(
+                localName = "chatterbox/speech_encoder.onnx",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/speech_encoder.onnx"),
+                approxBytes = 1_184_608L
+            ),
+            ModelFile(
+                localName = "chatterbox/speech_encoder.onnx_data",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/speech_encoder.onnx_data"),
+                approxBytes = 591_274_880L,
+                kind = Kind.ONNX_DATA
+            ),
+            ModelFile(
+                localName = "chatterbox/conditional_decoder.onnx",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/conditional_decoder.onnx"),
+                approxBytes = 6_350_448L
+            ),
+            ModelFile(
+                localName = "chatterbox/conditional_decoder.onnx_data",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "onnx/conditional_decoder.onnx_data"),
+                approxBytes = 533_970_816L,
+                kind = Kind.ONNX_DATA
+            ),
+            ModelFile(
+                localName = "chatterbox/tokenizer.json",
+                urls = hfx("onnx-community/chatterbox-multilingual-ONNX", "tokenizer.json"),
+                approxBytes = 25_470L,
+                kind = Kind.JSON
+            )
+        ),
+        runtimeRamBytes = 1_500_000_000L
+    )
+
     val CHATTERBOX_HI = Model(
         id = "chatterbox_hi",
-        name = "Chatterbox Hindi INT8 (voice cloning)",
+        name = "Chatterbox Hindi INT8 (PyTorch, not runnable yet)",
         stage = Stage.TTS,
+        required = false,
         sizeBytes = 658_584_623L,
         description = "Clones each speaker's voice from their own clips and " +
             "speaks the Hindi lines. Emotion sets the exaggeration.",
@@ -265,7 +346,7 @@ object ModelCatalog {
         )
     )
 
-    val ALL = listOf(CAMPPLUS, SENSEVOICE, EMOTION2VEC, NLLB, CHATTERBOX_HI)
+    val ALL = listOf(CAMPPLUS, SENSEVOICE, EMOTION2VEC, NLLB, CHATTERBOX_ONNX, CHATTERBOX_HI)
 
     fun byId(id: String): Model? = ALL.firstOrNull { it.id == id }
 

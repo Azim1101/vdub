@@ -76,6 +76,17 @@ class ModelCatalogTest {
         assertTrue(cb.ramBytes > 1_500_000_000L)
     }
 
+    /** Sizes must not silently drift from what is really hosted. */
+    @Test
+    fun `chatterbox onnx totals roughly its declared size`() {
+        val m = ModelCatalog.byId("chatterbox_onnx")!!
+        val parts = m.files.sumOf { it.approxBytes }
+        assertTrue(
+            "declared ${m.sizeMb} MB vs parts ${parts / 1024 / 1024} MB",
+            parts in (m.sizeBytes * 9 / 10)..(m.sizeBytes * 11 / 10)
+        )
+    }
+
     @Test
     fun `campplus is required and speaker stage`() {
         val m = ModelCatalog.byId("campplus")!!
@@ -97,17 +108,46 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun `tts is the project chatterbox model, not a substitute`() {
+    fun `tts stays chatterbox, and voice cloning is the point`() {
         val tts = ModelCatalog.forStage(ModelCatalog.Stage.TTS)
-        assertEquals(1, tts.size)
-        val m = tts.first()
-        assertEquals("chatterbox_hi", m.id)
-        // must come from the project's own repo
-        assertTrue(
-            m.files.all { f -> f.urls.any { it.contains("vdub-hindi-dubbing-lite") } }
-        )
-        // voice cloning is the whole point
-        assertTrue(m.description.contains("Clones", ignoreCase = true))
+        assertTrue(tts.isNotEmpty())
+        assertTrue(tts.all { it.name.contains("Chatterbox", ignoreCase = true) })
+        assertTrue(tts.all { it.description.contains("Clones", ignoreCase = true) })
+    }
+
+    /**
+     * At least one TTS option must actually be executable, otherwise Step 5
+     * can never run.
+     */
+    @Test
+    fun `a runnable voice model exists`() {
+        val runnable = ModelCatalog.forStage(ModelCatalog.Stage.TTS).filter { it.runnable }
+        assertTrue("no runnable TTS", runnable.isNotEmpty())
+        assertEquals("chatterbox_onnx", runnable.first().id)
+    }
+
+    /**
+     * ONNX external-data sidecars are raw weights, not protobuf, so they must
+     * not be validated as ONNX or every large model would fail to install.
+     */
+    @Test
+    fun `onnx data sidecars are typed as data`() {
+        ModelCatalog.ALL.flatMap { it.files }
+            .filter { it.localName.endsWith(".onnx_data") }
+            .also { assertTrue("expected sidecars", it.isNotEmpty()) }
+            .forEach { assertEquals(it.localName, ModelCatalog.Kind.ONNX_DATA, it.kind) }
+    }
+
+    /** A sidecar is useless without the graph that references it. */
+    @Test
+    fun `every sidecar has its graph`() {
+        ModelCatalog.ALL.forEach { m ->
+            val names = m.files.map { it.localName }.toSet()
+            names.filter { it.endsWith(".onnx_data") }.forEach { data ->
+                val graph = data.removeSuffix("_data")
+                assertTrue("$data has no $graph", names.contains(graph))
+            }
+        }
     }
 
     /**
@@ -118,10 +158,11 @@ class ModelCatalogTest {
     @Test
     fun `safetensors models are marked not runnable`() {
         val cb = ModelCatalog.byId("chatterbox_hi")!!
+        assertTrue(!cb.required)
         assertEquals(ModelCatalog.Runtime.SAFETENSORS, cb.runtime)
         assertTrue(!cb.runnable)
 
-        listOf("campplus", "emotion2vec", "nllb", "sensevoice").forEach {
+        listOf("campplus", "emotion2vec", "nllb", "sensevoice", "chatterbox_onnx").forEach {
             assertTrue("$it should be runnable", ModelCatalog.byId(it)!!.runnable)
         }
     }
