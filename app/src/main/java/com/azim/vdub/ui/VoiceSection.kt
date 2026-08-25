@@ -134,7 +134,7 @@ fun VoiceEngineCard(
             if (job is JobState.Failed) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "✗ ${job.error}",
+                    "✗ " + job.error.lineSequence().first().take(240),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -416,7 +416,7 @@ fun FinalVideoSection(
             is JobState.Failed -> {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "✗ ${job.error}",
+                    "✗ " + job.error.lineSequence().first().take(240),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )

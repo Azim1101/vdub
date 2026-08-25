@@ -57,15 +57,47 @@ class ChatterboxTts private constructor(
             }
 
             // Open in size order so a failure surfaces before the big ones load.
-            val encoder = env.createSession(paths.speechEncoder.absolutePath, opts())
-            val embed = env.createSession(paths.embedTokens.absolutePath, opts())
-            val llm = env.createSession(paths.languageModel.absolutePath, opts())
-            val decoder = env.createSession(paths.conditionalDecoder.absolutePath, opts())
+            val encoder = openGraph(env, paths.speechEncoder, opts())
+            val embed = openGraph(env, paths.embedTokens, opts())
+            val llm = openGraph(env, paths.languageModel, opts())
+            val decoder = openGraph(env, paths.conditionalDecoder, opts())
 
             return ChatterboxTts(
                 env, encoder, embed, llm, decoder,
                 ChatterboxTokenizer.load(paths.tokenizer)
             )
+        }
+
+        /**
+         * Open one graph, translating ONNX Runtime's failures into something
+         * actionable. Its raw message is a full node signature dump, which
+         * tells a user nothing about what to do next.
+         */
+        private fun openGraph(
+            env: OrtEnvironment,
+            file: File,
+            opts: OrtSession.SessionOptions
+        ): OrtSession = try {
+            env.createSession(file.absolutePath, opts)
+        } catch (e: Exception) {
+            val raw = e.message.orEmpty()
+            val hint = when {
+                // Contrib ops gain inputs across ORT releases; a model exported
+                // against a newer runtime cannot load on an older one.
+                raw.contains("not in range", ignoreCase = true) ||
+                    raw.contains("GroupQueryAttention") ->
+                    "This model needs a newer ONNX Runtime than the app has. " +
+                        "Update the app — the packaged runtime was raised for " +
+                        "exactly this."
+                raw.contains("No such file", ignoreCase = true) ->
+                    "${file.name} is missing. Re-download the voice engine."
+                raw.contains("Protobuf parsing failed", ignoreCase = true) ||
+                    raw.contains("invalid model", ignoreCase = true) ->
+                    "${file.name} looks corrupt or half-downloaded. " +
+                        "Remove and re-download the voice engine."
+                else -> "Could not load ${file.name}."
+            }
+            throw IllegalStateException("$hint\n\n(${raw.take(300)})", e)
         }
     }
 
