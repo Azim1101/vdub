@@ -21,7 +21,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            // ALU / on-device models are arm64 only
+            // Phones are arm64. CI emulators are x86_64, so debug builds carry
+            // both — otherwise instrumented tests cannot install at all.
             abiFilters += listOf("arm64-v8a")
         }
     }
@@ -30,6 +31,11 @@ android {
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
+            ndk {
+                // Adds the emulator ABI for instrumented tests; release stays
+                // arm64-only.
+                abiFilters += listOf("x86_64")
+            }
         }
         release {
             isMinifyEnabled = true
@@ -133,5 +139,6 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.kotlinx.coroutines.android)
     androidTestImplementation(platform(libs.androidx.compose.bom))
 }

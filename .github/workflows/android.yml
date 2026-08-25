@@ -116,6 +116,54 @@ jobs:
           sources. On first run, grant **All files access** via the folder icon —
           the pipeline reads and writes /storage/emulated/0/AI/ directly."
 
+      # Runs the app on a real Android image. Unit tests cannot cover
+      # MediaCodec, MediaMuxer or ONNX Runtime, which is where every on-device
+      # failure so far has come from.
+      - name: Enable KVM
+        if: success()
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instrumented tests
+        if: success()
+        id: instrumented
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -camera-back none
+          script: ./gradlew connectedDebugAndroidTest --stacktrace
+
+      - name: Report instrumented result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUTCOME="${{ steps.instrumented.outcome }}"
+          echo "## Instrumented tests: $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" != "success" ] && [ "$OUTCOME" != "skipped" ]; then
+            {
+              echo "Instrumented tests failed on \`${GITHUB_SHA:0:7}\`"
+              echo
+              echo '```'
+              find app/build/reports/androidTests -name '*.txt' -exec tail -40 {} + \
+                2>/dev/null | head -80 || echo "(no report captured)"
+              echo '```'
+            } > /tmp/instr.md
+            gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@/tmp/instr.md >/dev/null || true
+          fi
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
