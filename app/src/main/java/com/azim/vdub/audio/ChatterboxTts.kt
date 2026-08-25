@@ -266,7 +266,8 @@ class ChatterboxTts private constructor(
         override fun close() {
             // Closing the owning result frees the tensors with it; standalone
             // tensors (the initial empty cache) own themselves.
-            if (owner != null) runCatching { owner.close() }
+            val held = owner
+            if (held != null) runCatching { held.close() }
             else tensors.values.forEach { runCatching { it.close() } }
         }
     }
