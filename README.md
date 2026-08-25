@@ -40,8 +40,8 @@ each stage closes its ONNX session before the next opens.
 
 | | |
 |---|---|
-| Disk, if you download everything | **2.86 GB** |
-| **Peak RAM** | **591 MB** analysis · ~1.5 GB while speaking |
+| Disk — the models you need | **1.72 GB** |
+| **Peak RAM** | **591 MB** analysis · **~1.1 GB** while speaking |
 
 A unit test pins that invariant so it cannot quietly regress.
 
@@ -58,7 +58,7 @@ with size, licence, purpose, disk used and free space.
 | SenseVoice ASR | 237 MB | Transcribe | no — only if you have no SRT |
 | emotion2vec+ base | 355 MB | Emotion | yes |
 | NLLB-200 distilled 600M | 591 MB | Translate | yes · CC-BY-NC |
-| Chatterbox Multilingual ONNX (voice cloning) | 1483 MB | Voice | yes · MIT |
+| Chatterbox Multilingual q4 (voice cloning) | 791 MB | Voice | yes · MIT |
 | Chatterbox Hindi INT8 (PyTorch) | 628 MB | Voice | no — not runnable yet |
 
 Every file has two mirrors (huggingface.co and hf-mirror.com), transfers are
@@ -306,11 +306,16 @@ CI builds the APK on every push and republishes the `step1-latest` release.
   project's own `vdub-hindi-dubbing-lite` ships `t3_hi_int8.safetensors` and a
   PyTorch `ve.pt`, and expects the 1.06 GB S3Gen vocoder from upstream — none of
   which ONNX Runtime can execute. `onnx-community/chatterbox-multilingual-ONNX`
-  is the same model family with a real ONNX export, includes Hindi, and keeps
-  zero-shot cloning and exaggeration control. The lite entry is kept but marked
-  optional and not runnable.
-- **Speaking is the heavy stage** — about 1.5 GB RAM and roughly a minute per
-  line on a phone CPU, versus 591 MB for everything before it.
+  `verify01234/chatterbox-multilingual-ONNX-q4` is the same model family with a
+  real ONNX export, includes Hindi, and keeps zero-shot cloning and exaggeration
+  control. It is the **single-file** q4 build — the upstream export splits
+  weights into `.onnx_data` sidecars that must sit beside their graph, which is
+  fragile across the app's two storage roots, and is nearly twice the size. The
+  lite entry is kept but marked optional and not runnable.
+- **Speaking is the heavy stage** — about 1.1 GB RAM and roughly a minute per
+  line on a phone CPU, versus 591 MB for everything before it. Generation must
+  use `repetition_penalty = 1.2`; the upstream default of 2.0 makes this
+  quantized build loop forever.
 - Chatterbox output carries a **PerTh watermark** (upstream behaviour), and you
   should have permission from whoever owns a voice before cloning it.
 - **BGM separation (TIGER-DnR) is not included.** That repo ships only
