@@ -129,6 +129,24 @@ object VdubPaths {
         stepMarker(project, step).delete()
     }
 
+    /** Highest step finished, 0 when nothing has been done. */
+    fun lastCompletedStep(project: String): Int =
+        (LAST_STEP downTo 1).firstOrNull { isStepDone(project, it) } ?: 0
+
+    /**
+     * Where reopening this project should land.
+     *
+     * One past the last finished step, so a half-finished project drops the
+     * user on the work that is actually outstanding instead of making them
+     * press Next through screens that are already done. Capped at [LAST_STEP]
+     * so a fully dubbed project reopens on its final screen rather than
+     * nowhere.
+     */
+    fun resumeStep(project: String): Int =
+        (lastCompletedStep(project) + 1).coerceAtMost(LAST_STEP)
+
+    const val LAST_STEP = 6
+
     /**
      * Create the project tree and prove it is writable.
      * @throws IllegalStateException with an actionable message, instead of

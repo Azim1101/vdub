@@ -425,3 +425,39 @@ fun FinalVideoSection(
         }
     }
 }
+
+/**
+ * Shown when the app skipped ahead on launch.
+ *
+ * Landing on Step 4 without explanation looks like the app lost the earlier
+ * work, so say plainly that it was found and finished.
+ */
+@Composable
+fun ResumeNoticeCard(resumedAtStep: Int?, onDismiss: () -> Unit) {
+    if (resumedAtStep == null) return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+    ) {
+        Row(
+            Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Picked up where you left off",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "Earlier steps were already finished, so this opened at " +
+                        "step $resumedAtStep. Use back to review them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onDismiss) { Text("OK") }
+        }
+    }
+}

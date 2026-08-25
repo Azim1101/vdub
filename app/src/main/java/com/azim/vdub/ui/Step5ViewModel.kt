@@ -1,9 +1,11 @@
 package com.azim.vdub.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.azim.vdub.audio.VoiceEngine
 import com.azim.vdub.core.ModelCatalog
+import com.azim.vdub.core.DubbingService
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.local.VoicePrefs
 import com.azim.vdub.data.model.EmotionStyle
@@ -12,6 +14,7 @@ import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.repo.ProjectRepository
 import com.azim.vdub.net.ModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +69,7 @@ data class Step5UiState(
 
 @HiltViewModel
 class Step5ViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repo: ProjectRepository,
     private val downloader: ModelDownloader,
     private val voicePrefs: VoicePrefs
@@ -164,17 +168,26 @@ class Step5ViewModel @Inject constructor(
      * Speak every line. Resumable — clips already on disk are skipped, so an
      * interrupted multi-hour run continues rather than starting over.
      */
-    fun speak() = launchJob("Speaking") {
+    fun speak() = launchJob("Speaking", foreground = true) {
         val project = _state.value.projectName
         val spoken = repo.speakAll(project, _state.value.engineId) { p ->
+            val detail = buildString {
+                append("${p.done} / ${p.total}")
+                if (p.speaker.isNotBlank()) append("  ·  ${p.speaker}")
+                if (p.line.isNotBlank()) append("  ·  ${p.line}")
+            }
             progress(
                 "Speaking",
                 if (p.total > 0) p.done.toFloat() / p.total else -1f,
-                buildString {
-                    append("${p.done} / ${p.total}")
-                    if (p.speaker.isNotBlank()) append("  ·  ${p.speaker}")
-                    if (p.line.isNotBlank()) append("  ·  ${p.line}")
-                }
+                detail
+            )
+            // Mirror into the notification so progress is visible with the
+            // screen off, which is where most of these hours are spent.
+            DubbingService.update(
+                context,
+                "Speaking ${p.done}/${p.total}",
+                if (p.speaker.isNotBlank()) p.speaker else "",
+                if (p.total > 0) p.done * 100 / p.total else -1
             )
         }
         _state.update {
@@ -186,7 +199,7 @@ class Step5ViewModel @Inject constructor(
     }
 
     /** Fit the clips to the original timing and write dubbed_video.mp4. */
-    fun buildVideo() = launchJob("Building video") {
+    fun buildVideo() = launchJob("Building video", foreground = true) {
         val project = _state.value.projectName
         val out = repo.buildDubbedVideo(project, _state.value.keepBackground) { label, p ->
             progress(label, p, "")
@@ -199,19 +212,33 @@ class Step5ViewModel @Inject constructor(
         }
     }
 
-    private fun launchJob(label: String, block: suspend () -> Unit) {
+    /**
+     * @param foreground start a foreground service for the duration. Without
+     *        one Android suspends the process when the screen locks, and a
+     *        multi-hour run silently stalls.
+     */
+    private fun launchJob(
+        label: String,
+        foreground: Boolean = false,
+        block: suspend () -> Unit
+    ) {
         if (_state.value.busy) return
         job?.cancel()
         job = viewModelScope.launch {
             _state.update { it.copy(job = JobState.Running(label), message = null) }
-            runCatching { block() }.onFailure { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                _state.update {
-                    it.copy(
-                        job = JobState.Failed(label, e.message ?: "failed"),
-                        message = e.message
-                    )
+            if (foreground) DubbingService.start(context, label, "Starting…")
+            try {
+                runCatching { block() }.onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    _state.update {
+                        it.copy(
+                            job = JobState.Failed(label, e.message ?: "failed"),
+                            message = e.message
+                        )
+                    }
                 }
+            } finally {
+                if (foreground) DubbingService.stop(context)
             }
         }
     }

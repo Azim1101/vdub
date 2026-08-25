@@ -50,6 +50,11 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".core.DubbingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

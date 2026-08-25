@@ -1,16 +1,19 @@
 package com.azim.vdub.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
 import com.azim.vdub.core.ModelCatalog
+import com.azim.vdub.core.DubbingService
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.repo.ProjectRepository
 import com.azim.vdub.net.ModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +54,7 @@ data class Step2UiState(
 
 @HiltViewModel
 class Step2ViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repo: ProjectRepository,
     private val modelDownloader: ModelDownloader
 ) : ViewModel() {
@@ -132,7 +136,7 @@ class Step2ViewModel @Inject constructor(
         else "%.1f MB".format(b / 1024.0 / 1024.0)
 
     /** Full run: campplus over every clip, then cluster. */
-    fun extractAndCluster() = launchJob("Extracting embeddings") {
+    fun extractAndCluster() = launchJob("Extracting embeddings", foreground = true) {
         val project = _state.value.projectName
         val embeds = repo.embedSpeakers(project) { done, total ->
             progress(
@@ -203,24 +207,37 @@ class Step2ViewModel @Inject constructor(
             }
     }
 
-    private fun launchJob(label: String, block: suspend () -> Unit) {
+    private fun launchJob(
+        label: String,
+        foreground: Boolean = false,
+        block: suspend () -> Unit
+    ) {
         if (_state.value.busy) return
         runningJob?.cancel()
         runningJob = viewModelScope.launch {
             _state.update { it.copy(job = JobState.Running(label), message = null) }
-            runCatching { block() }.onFailure { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                _state.update {
-                    it.copy(
-                        job = JobState.Failed(label, e.message ?: "failed"),
-                        message = e.message
-                    )
+            if (foreground) DubbingService.start(context, label, "Starting…")
+            try {
+                runCatching { block() }.onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    _state.update {
+                        it.copy(
+                            job = JobState.Failed(label, e.message ?: "failed"),
+                            message = e.message
+                        )
+                    }
                 }
+            } finally {
+                if (foreground) DubbingService.stop(context)
             }
         }
     }
 
     private fun progress(label: String, value: Float, detail: String) {
         _state.update { it.copy(job = JobState.Running(label, value, detail)) }
+        DubbingService.update(
+            context, label, detail,
+            if (value >= 0f) (value * 100).toInt() else -1
+        )
     }
 }

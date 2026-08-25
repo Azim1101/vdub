@@ -1,14 +1,17 @@
 package com.azim.vdub.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.azim.vdub.core.DubbingService
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.model.JobState
 import com.azim.vdub.data.model.ScriptLine
 import com.azim.vdub.data.model.VideoSource
 import com.azim.vdub.data.repo.ProjectRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +54,7 @@ data class Step1UiState(
 
 @HiltViewModel
 class Step1ViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repo: ProjectRepository
 ) : ViewModel() {
 
@@ -192,7 +196,7 @@ class Step1ViewModel @Inject constructor(
         afterVideo(file, VideoSource.GALLERY)
     }
 
-    fun downloadVideo() = launchJob("Downloading video") {
+    fun downloadVideo() = launchJob("Downloading video", foreground = true) {
         val s = _state.value
         require(s.sourceUrl.isNotBlank()) { "Paste a video URL first" }
         val file = repo.downloadVideoFromUrl(
@@ -316,7 +320,7 @@ class Step1ViewModel @Inject constructor(
 
     // -------------------------------------------------------------- trim
 
-    fun trim() = launchJob("Trimming clips") {
+    fun trim() = launchJob("Trimming clips", foreground = true) {
         val project = _state.value.projectName
         val result = repo.trimIntoClips(
             project = project,
@@ -346,21 +350,35 @@ class Step1ViewModel @Inject constructor(
 
     // ------------------------------------------------------------- helpers
 
-    private fun launchJob(label: String, block: suspend () -> Unit) {
+    /** @param foreground keep working with the screen off. */
+    private fun launchJob(
+        label: String,
+        foreground: Boolean = false,
+        block: suspend () -> Unit
+    ) {
         if (_state.value.busy) return
         runningJob?.cancel()
         runningJob = viewModelScope.launch {
             _state.update { it.copy(job = JobState.Running(label), message = null) }
-            runCatching { block() }
-                .onFailure { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    fail(label, e)
-                }
+            if (foreground) DubbingService.start(context, label, "Starting…")
+            try {
+                runCatching { block() }
+                    .onFailure { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        fail(label, e)
+                    }
+            } finally {
+                if (foreground) DubbingService.stop(context)
+            }
         }
     }
 
     private fun progress(label: String, value: Float, detail: String) {
         _state.update { it.copy(job = JobState.Running(label, value, detail)) }
+        DubbingService.update(
+            context, label, detail,
+            if (value >= 0f) (value * 100).toInt() else -1
+        )
     }
 
     private fun fail(label: String, e: Throwable) {

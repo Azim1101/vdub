@@ -25,6 +25,7 @@ class VoicePrefs @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private val key = stringPreferencesKey("voice_engine_id")
+    private val lastProjectKey = stringPreferencesKey("last_project")
 
     /** Defaults to the Q4 pack — the smaller download. */
     val engineId: Flow<String> = context.voiceDataStore.data.map { prefs ->
@@ -37,5 +38,16 @@ class VoicePrefs @Inject constructor(
     suspend fun setEngine(id: String) {
         require(ModelCatalog.VOICE_ENGINES.any { it.id == id }) { "Unknown voice engine: $id" }
         context.voiceDataStore.edit { it[key] = id }
+    }
+
+    /**
+     * The project the user last worked on, so relaunching reopens it instead
+     * of dropping them on an empty Step 1.
+     */
+    val lastProject: Flow<String?> = context.voiceDataStore.data.map { it[lastProjectKey] }
+
+    suspend fun setLastProject(name: String) {
+        if (name.isBlank()) return
+        context.voiceDataStore.edit { it[lastProjectKey] = name }
     }
 }

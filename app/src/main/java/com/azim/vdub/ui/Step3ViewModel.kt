@@ -1,9 +1,11 @@
 package com.azim.vdub.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.azim.vdub.audio.EmotionClassifier
 import com.azim.vdub.core.ModelCatalog
+import com.azim.vdub.core.DubbingService
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.model.EmotionStyle
 import com.azim.vdub.data.model.JobState
@@ -11,6 +13,7 @@ import com.azim.vdub.data.model.SpeakerLine
 import com.azim.vdub.data.repo.ProjectRepository
 import com.azim.vdub.net.ModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +42,7 @@ data class Step3UiState(
 
 @HiltViewModel
 class Step3ViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repo: ProjectRepository,
     private val downloader: ModelDownloader
 ) : ViewModel() {
@@ -100,7 +104,7 @@ class Step3ViewModel @Inject constructor(
         }
     }
 
-    fun detect() = launchJob("Detecting emotion") {
+    fun detect() = launchJob("Detecting emotion", foreground = true) {
         val script = repo.detectEmotions(_state.value.projectName) { done, total ->
             progress(
                 "Detecting emotion",
@@ -130,25 +134,38 @@ class Step3ViewModel @Inject constructor(
 
     fun exaggerationFor(emotion: String) = EmotionStyle.exaggeration(emotion)
 
-    private fun launchJob(label: String, block: suspend () -> Unit) {
+    private fun launchJob(
+        label: String,
+        foreground: Boolean = false,
+        block: suspend () -> Unit
+    ) {
         if (_state.value.busy) return
         job?.cancel()
         job = viewModelScope.launch {
             _state.update { it.copy(job = JobState.Running(label), message = null) }
-            runCatching { block() }.onFailure { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                _state.update {
-                    it.copy(
-                        job = JobState.Failed(label, e.message ?: "failed"),
-                        message = e.message
-                    )
+            if (foreground) DubbingService.start(context, label, "Starting…")
+            try {
+                runCatching { block() }.onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    _state.update {
+                        it.copy(
+                            job = JobState.Failed(label, e.message ?: "failed"),
+                            message = e.message
+                        )
+                    }
                 }
+            } finally {
+                if (foreground) DubbingService.stop(context)
             }
         }
     }
 
     private fun progress(label: String, value: Float, detail: String) {
         _state.update { it.copy(job = JobState.Running(label, value, detail)) }
+        DubbingService.update(
+            context, label, detail,
+            if (value >= 0f) (value * 100).toInt() else -1
+        )
     }
 
     private fun mb(b: Long) =
