@@ -148,7 +148,6 @@ jobs:
           # nothing here needs Play services
           target: default
           arch: x86_64
-          force-avd-creation: false
           disable-animations: true
           emulator-boot-timeout: 900
           emulator-options: >-
