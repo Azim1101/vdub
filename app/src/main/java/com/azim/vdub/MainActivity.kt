@@ -63,7 +63,12 @@ import com.azim.vdub.ui.ClipsPreviewSection
 import com.azim.vdub.ui.EmotionLinesSection
 import com.azim.vdub.ui.EmotionModelCard
 import com.azim.vdub.ui.EmotionSection
+import com.azim.vdub.ui.AutoTranslateSection
 import com.azim.vdub.ui.NextStep4Button
+import com.azim.vdub.ui.NextStep5Button
+import com.azim.vdub.ui.Step4ViewModel
+import com.azim.vdub.ui.TranslationLinesSection
+import com.azim.vdub.ui.TranslationUploadSection
 import com.azim.vdub.ui.Step3ViewModel
 import com.azim.vdub.ui.ModelStatusCard
 import com.azim.vdub.ui.NextStep3Button
@@ -126,6 +131,12 @@ fun VdubRoot() {
         3 -> Step3Screen(
             project = project,
             onBack = { screen = 2 },
+            onOpenSettings = { screen = 9 },
+            onNext = { screen = 4 }
+        )
+        4 -> Step4Screen(
+            project = project,
+            onBack = { screen = 3 },
             onOpenSettings = { screen = 9 }
         )
         else -> SettingsScreen(
@@ -141,6 +152,7 @@ fun Step3Screen(
     project: String,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
+    onNext: () -> Unit,
     vm: Step3ViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -222,7 +234,12 @@ fun Step3Screen(
                     onSetEmotion = vm::setEmotion
                 )
             }
-            item { NextStep4Button(enabled = state.step3Done && !state.busy) { } }
+            item {
+                NextStep4Button(
+                    enabled = state.step3Done && !state.busy,
+                    onClick = onNext
+                )
+            }
             item { Spacer(Modifier.height(20.dp)) }
         }
     }
@@ -329,6 +346,117 @@ fun Step2Screen(
             item {
                 NextStep3Button(enabled = state.step2Done && !state.busy, onClick = onNext)
             }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Step4Screen(
+    project: String,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    vm: Step4ViewModel = hiltViewModel()
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(project) { vm.load(project) }
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            vm.dismissMessage()
+        }
+    }
+
+    val srtPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let(vm::importSrt) }
+
+    val jsonPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let(vm::importJson) }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎬 vdub")
+                        Spacer(Modifier.width(10.dp))
+                        StepBadge(
+                            text = if (state.step4Done) "Step 4 ✓" else "Step 4",
+                            done = state.step4Done
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Step 3")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                TranslationUploadSection(
+                    source = state.source,
+                    translatedCount = state.translatedCount,
+                    total = state.total,
+                    missing = state.missing,
+                    progress = state.progress,
+                    busy = state.busy,
+                    job = state.job,
+                    exportedPath = state.exportedPath,
+                    onUploadSrt = {
+                        srtPicker.launch(
+                            arrayOf("application/x-subrip", "text/plain", "*/*")
+                        )
+                    },
+                    onUploadJson = {
+                        jsonPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                    onExportSrt = vm::exportSrt,
+                    onExportJson = vm::exportJson
+                )
+            }
+            item {
+                AutoTranslateSection(
+                    nllbInstalled = state.nllbInstalled,
+                    busy = state.busy,
+                    job = state.job,
+                    onDownload = vm::downloadNllb,
+                    onTranslate = vm::autoTranslateNotReady
+                )
+            }
+            item {
+                TranslationLinesSection(
+                    lines = state.lines,
+                    speakerName = state::speakerName,
+                    onSetLine = vm::setLine
+                )
+            }
+            item { NextStep5Button(enabled = state.complete && !state.busy) { } }
             item { Spacer(Modifier.height(20.dp)) }
         }
     }

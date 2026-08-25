@@ -19,6 +19,8 @@ import com.azim.vdub.data.model.ScriptRaw
 import com.azim.vdub.data.model.EmotionScript
 import com.azim.vdub.data.model.EmotionStyle
 import com.azim.vdub.data.model.SpeakerLine
+import com.azim.vdub.data.model.TranslatedScript
+import com.azim.vdub.data.model.TranslationSource
 import com.azim.vdub.data.model.SpeakerScript
 import com.azim.vdub.data.model.SrtCue
 import com.azim.vdub.data.model.VideoSource
@@ -614,6 +616,156 @@ class ProjectRepository @Inject constructor(
         val f = VdubPaths.scriptEmotion(project)
         if (!f.exists()) return@withContext null
         runCatching { json.decodeFromString(EmotionScript.serializer(), f.readText()) }.getOrNull()
+    }
+
+    // --------------------------------------------------- Step 4: translation
+
+    /** Lines carrying speaker + emotion, ready to be translated. */
+    private suspend fun linesForTranslation(project: String): List<SpeakerLine> =
+        readTranslatedScript(project)?.lines
+            ?: readEmotionScript(project)?.lines
+            ?: readSpeakerScript(project)?.lines
+            ?: error("Run the earlier steps first")
+
+    /**
+     * Import an already-translated SRT and skip machine translation entirely.
+     * Cues are matched to lines by time overlap, so the file does not have to
+     * share our line boundaries — a translator working from the exported SRT
+     * may well have merged or split a few.
+     */
+    suspend fun importTranslationSrt(project: String, uri: Uri): TranslatedScript =
+        withContext(Dispatchers.IO) {
+            val target = VdubPaths.translatedSrt(project)
+            target.parentFile?.mkdirs()
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { input.copyTo(it) }
+            } ?: error("Cannot open $uri")
+
+            val cues = SrtParser.parse(target)
+            check(cues.isNotEmpty()) { "No subtitles found in that file" }
+
+            val lines = linesForTranslation(project).map { line ->
+                val hit = cues.filter { c ->
+                    c.endMs / 1000.0 > line.start && c.startMs / 1000.0 < line.end
+                }
+                if (hit.isEmpty()) line
+                else line.copy(hi = hit.joinToString(" ") { it.text }.trim())
+            }
+            saveTranslated(project, lines, TranslationSource.UPLOADED_SRT)
+        }
+
+    /**
+     * Import a translated JSON — the file produced by Export, with `hi` filled
+     * in. Matched by `utt`, so timing edits cannot misalign it.
+     */
+    suspend fun importTranslationJson(project: String, uri: Uri): TranslatedScript =
+        withContext(Dispatchers.IO) {
+            val text = context.contentResolver.openInputStream(uri)?.use {
+                it.readBytes().decodeToString()
+            } ?: error("Cannot open $uri")
+
+            val incoming = runCatching {
+                json.decodeFromString(TranslatedScript.serializer(), text).lines
+            }.getOrElse {
+                runCatching {
+                    json.decodeFromString(
+                        kotlinx.serialization.builtins.ListSerializer(SpeakerLine.serializer()),
+                        text
+                    )
+                }.getOrElse {
+                    error("Not a vdub translation JSON — expected the exported file")
+                }
+            }
+            check(incoming.isNotEmpty()) { "That JSON has no lines" }
+
+            val byUtt = incoming.associateBy { it.utt }
+            val lines = linesForTranslation(project).map { line ->
+                val hi = byUtt[line.utt]?.hi.orEmpty()
+                if (hi.isBlank()) line else line.copy(hi = hi.trim())
+            }
+            saveTranslated(project, lines, TranslationSource.UPLOADED_JSON)
+        }
+
+    /** Export lines as JSON for hand translation — `hi` left blank to fill in. */
+    suspend fun exportTranslationJson(project: String): File = withContext(Dispatchers.IO) {
+        val lines = linesForTranslation(project)
+        val out = File(VdubPaths.outDir(project), "${project}_to_translate.json")
+        out.parentFile?.mkdirs()
+        out.writeText(
+            json.encodeToString(
+                TranslatedScript.serializer(),
+                TranslatedScript(
+                    project = project,
+                    source = TranslationSource.NONE.name,
+                    translatedCount = 0,
+                    lines = lines
+                )
+            )
+        )
+        out
+    }
+
+    /** Export as SRT for translators who prefer subtitle tools. */
+    suspend fun exportTranslationSrt(project: String): File = withContext(Dispatchers.IO) {
+        val lines = linesForTranslation(project)
+        val out = File(VdubPaths.outDir(project), "${project}_to_translate.srt")
+        out.parentFile?.mkdirs()
+        out.writeText(
+            buildString {
+                lines.forEachIndexed { i, l ->
+                    append(i + 1).append('\n')
+                    append(srtTime(l.start)).append(" --> ").append(srtTime(l.end)).append('\n')
+                    append(l.text).append("\n\n")
+                }
+            }
+        )
+        out
+    }
+
+    suspend fun setLineTranslation(project: String, utt: String, hi: String): TranslatedScript? =
+        withContext(Dispatchers.IO) {
+            val current = readTranslatedScript(project) ?: return@withContext null
+            val lines = current.lines.map { if (it.utt == utt) it.copy(hi = hi) else it }
+            saveTranslated(project, lines, TranslationSource.MANUAL_EDIT)
+        }
+
+    private suspend fun saveTranslated(
+        project: String,
+        lines: List<SpeakerLine>,
+        source: TranslationSource
+    ): TranslatedScript = withContext(Dispatchers.IO) {
+        val done = lines.count { it.hi.isNotBlank() }
+        val script = TranslatedScript(
+            project = project,
+            source = source.name,
+            translatedCount = done,
+            lines = lines
+        )
+        VdubPaths.ensureProject(project)
+        VdubPaths.scriptTranslated(project)
+            .writeText(json.encodeToString(TranslatedScript.serializer(), script))
+
+        // Only complete once every line has text; a partial upload must not
+        // let the pipeline move on and silently drop lines.
+        if (done == lines.size && done > 0) VdubPaths.markStepDone(project, 4)
+        else VdubPaths.clearStep(project, 4)
+        script
+    }
+
+    suspend fun readTranslatedScript(project: String): TranslatedScript? =
+        withContext(Dispatchers.IO) {
+            val f = VdubPaths.scriptTranslated(project)
+            if (!f.exists()) return@withContext null
+            runCatching {
+                json.decodeFromString(TranslatedScript.serializer(), f.readText())
+            }.getOrNull()
+        }
+
+    private fun srtTime(sec: Double): String {
+        val ms = (sec * 1000).toLong().coerceAtLeast(0)
+        return "%02d:%02d:%02d,%03d".format(
+            ms / 3_600_000, (ms % 3_600_000) / 60_000, (ms % 60_000) / 1000, ms % 1000
+        )
     }
 
     suspend fun readSpeakerScript(project: String): SpeakerScript? = withContext(Dispatchers.IO) {

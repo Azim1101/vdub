@@ -72,6 +72,19 @@ data class SpeakerLine(
     @SerialName("hi") val hi: String = ""            // translated text, Step 4
 )
 
+/** How the Hindi text was produced. */
+enum class TranslationSource { NONE, UPLOADED_SRT, UPLOADED_JSON, AUTO_NLLB, MANUAL_EDIT }
+
+/** Step 4 output: out/script_translated.json */
+@Serializable
+data class TranslatedScript(
+    @SerialName("project") val project: String,
+    @SerialName("source") val source: String = "NONE",
+    @SerialName("target_lang") val targetLang: String = "hin_Deva",
+    @SerialName("translated_count") val translatedCount: Int = 0,
+    @SerialName("lines") val lines: List<SpeakerLine> = emptyList()
+)
+
 /** Step 3 output: out/script_emotion.json */
 @Serializable
 data class EmotionScript(
