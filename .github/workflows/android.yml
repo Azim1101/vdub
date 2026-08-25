@@ -142,7 +142,9 @@ jobs:
           emulator-options: >-
             -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
             -camera-back none
-          script: ./gradlew connectedDebugAndroidTest --stacktrace
+          script: |
+            set -o pipefail
+            ./gradlew connectedDebugAndroidTest --stacktrace 2>&1 | tee /tmp/instr.log
 
       - name: Report instrumented result
         if: always()
@@ -156,8 +158,7 @@ jobs:
               echo "Instrumented tests failed on \`${GITHUB_SHA:0:7}\`"
               echo
               echo '```'
-              find app/build/reports/androidTests -name '*.txt' -exec tail -40 {} + \
-                2>/dev/null | head -80 || echo "(no report captured)"
+              python3 .github/scripts/report_instrumented.py 2>&1 | head -120
               echo '```'
             } > /tmp/instr.md
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
