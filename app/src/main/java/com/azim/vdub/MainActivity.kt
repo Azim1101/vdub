@@ -65,7 +65,11 @@ import com.azim.vdub.ui.EmotionModelCard
 import com.azim.vdub.ui.EmotionSection
 import com.azim.vdub.ui.AutoTranslateSection
 import com.azim.vdub.ui.NextStep4Button
+import com.azim.vdub.ui.GenerateVoiceSection
 import com.azim.vdub.ui.NextStep5Button
+import com.azim.vdub.ui.SpeakerVoiceSection
+import com.azim.vdub.ui.Step5ViewModel
+import com.azim.vdub.ui.VoiceEngineCard
 import com.azim.vdub.ui.Step4ViewModel
 import com.azim.vdub.ui.TranslationLinesSection
 import com.azim.vdub.ui.TranslationUploadSection
@@ -137,6 +141,12 @@ fun VdubRoot() {
         4 -> Step4Screen(
             project = project,
             onBack = { screen = 3 },
+            onOpenSettings = { screen = 9 },
+            onNext = { screen = 5 }
+        )
+        5 -> Step5Screen(
+            project = project,
+            onBack = { screen = 4 },
             onOpenSettings = { screen = 9 }
         )
         else -> SettingsScreen(
@@ -357,6 +367,7 @@ fun Step4Screen(
     project: String,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
+    onNext: () -> Unit,
     vm: Step4ViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -456,7 +467,104 @@ fun Step4Screen(
                     onSetLine = vm::setLine
                 )
             }
-            item { NextStep5Button(enabled = state.complete && !state.busy) { } }
+            item {
+                NextStep5Button(
+                    enabled = state.complete && !state.busy,
+                    onClick = onNext
+                )
+            }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Step5Screen(
+    project: String,
+    onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
+    vm: Step5ViewModel = hiltViewModel()
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(project) { vm.load(project) }
+    LaunchedEffect(state.message) {
+        state.message?.let {
+            snackbar.showSnackbar(it)
+            vm.dismissMessage()
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🎬 vdub")
+                        Spacer(Modifier.width(10.dp))
+                        StepBadge(
+                            text = if (state.spokenCount >= state.total && state.total > 0)
+                                "Step 5 ✓" else "Step 5",
+                            done = state.total > 0 && state.spokenCount >= state.total
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back to Step 4")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                VoiceEngineCard(
+                    engineName = state.engineName,
+                    installed = state.engineInstalled,
+                    sizeMb = state.engineSizeMb,
+                    missingFiles = state.missingFiles,
+                    busy = state.busy,
+                    job = state.job,
+                    onDownload = vm::downloadEngine,
+                    onOpenSettings = onOpenSettings
+                )
+            }
+            item { SpeakerVoiceSection(speakers = state.speakers) }
+            item {
+                GenerateVoiceSection(
+                    total = state.total,
+                    untranslated = state.untranslated,
+                    spokenCount = state.spokenCount,
+                    estimateMinutes = state.estimateMinutes,
+                    engineInstalled = state.engineInstalled,
+                    ready = state.readyToSpeak,
+                    busy = state.busy,
+                    job = state.job,
+                    onSpeak = vm::speakNotReady,
+                    onCancel = vm::cancel
+                )
+            }
             item { Spacer(Modifier.height(20.dp)) }
         }
     }
