@@ -166,13 +166,15 @@ private fun ActionChip(
 @Composable
 fun VideoUploadSection(
     hasVideo: Boolean,
+    videoLabel: String,
     url: String,
     busy: Boolean,
     onPickGallery: () -> Unit,
     onPickDrive: () -> Unit,
     onPasteUrl: () -> Unit,
     onUrlChange: (String) -> Unit,
-    onDownload: () -> Unit
+    onDownload: () -> Unit,
+    onClearVideo: () -> Unit
 ) {
     SectionCard(
         number = "1",
@@ -180,6 +182,34 @@ fun VideoUploadSection(
         subtitle = if (hasVideo) "input_video.mp4 ready" else "Gallery, URL or Drive",
         done = hasVideo
     ) {
+        // Make the loaded file visible and removable, so a leftover video from
+        // a previous run is obvious rather than silently reused.
+        if (hasVideo) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        videoLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onClearVideo, enabled = !busy) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionChip(
                 Icons.Default.Folder, "Gallery",

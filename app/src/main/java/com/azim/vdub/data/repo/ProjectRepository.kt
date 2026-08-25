@@ -371,7 +371,14 @@ class ProjectRepository @Inject constructor(
         result
     }
 
-    /** Reconcile DB with what's actually on disk (resume after reinstall). */
+    /**
+     * Reconcile DB with what's actually on disk (resume after reinstall).
+     *
+     * Disk is the source of truth in both directions: if a file has been
+     * deleted, the stale DB path is cleared rather than kept. Falling back to
+     * the old value made a removed video look present, so the player pointed
+     * at a file that was not there.
+     */
     suspend fun rehydrate(project: String): ProjectEntity = withContext(Dispatchers.IO) {
         VdubPaths.ensureProject(project)
         val video = VdubPaths.inputVideo(project)
@@ -381,21 +388,58 @@ class ProjectRepository @Inject constructor(
         val clipCount = VdubPaths.clipCount(project)
         val base = projectDao.get(project) ?: ProjectEntity(name = project)
 
+        val hasVideo = video.exists() && video.length() > 0
         val entity = base.copy(
-            videoPath = video.takeIf { it.exists() }?.absolutePath ?: base.videoPath,
-            durationMs = if (video.exists() && base.durationMs == 0L) probeDurationMs(video)
-            else base.durationMs,
-            srtPath = srt.takeIf { it.exists() }?.absolutePath ?: base.srtPath,
-            translatedSrtPath = translated.takeIf { it.exists() }?.absolutePath
-                ?: base.translatedSrtPath,
-            cueCount = script?.cueCount ?: base.cueCount,
-            lineCount = script?.lines?.size ?: base.lineCount,
+            videoPath = if (hasVideo) video.absolutePath else null,
+            videoSource = if (hasVideo) base.videoSource else VideoSource.NONE.name,
+            sourceUrl = if (hasVideo) base.sourceUrl else null,
+            durationMs = if (hasVideo) {
+                if (base.durationMs == 0L) probeDurationMs(video) else base.durationMs
+            } else 0L,
+            srtPath = srt.takeIf { it.exists() }?.absolutePath,
+            translatedSrtPath = translated.takeIf { it.exists() }?.absolutePath,
+            cueCount = script?.cueCount ?: 0,
+            lineCount = script?.lines?.size ?: 0,
             clipCount = clipCount,
-            step1Done = VdubPaths.isStepDone(project, 1) || clipCount > 0,
+            step1Done = VdubPaths.isStepDone(project, 1) && clipCount > 0,
             updatedAt = System.currentTimeMillis()
         )
         projectDao.upsert(entity)
         entity
+    }
+
+    /** Remove the video and anything derived from it, keeping subtitles. */
+    suspend fun clearVideo(project: String) = withContext(Dispatchers.IO) {
+        VdubPaths.inputVideo(project).delete()
+        VdubPaths.orgAudio(project).delete()
+        VdubPaths.clipsDir(project).listFiles()?.forEach { it.delete() }
+        VdubPaths.clearStep(project, 1)
+        clipDao.clear(project)
+        projectDao.get(project)?.let {
+            projectDao.upsert(
+                it.copy(
+                    videoPath = null,
+                    videoSource = VideoSource.NONE.name,
+                    sourceUrl = null,
+                    durationMs = 0L,
+                    clipCount = 0,
+                    step1Done = false,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /**
+     * Delete everything belonging to a project — files, clips, markers and
+     * DB rows — so a stuck or half-finished run can be started over.
+     */
+    suspend fun resetProject(project: String) = withContext(Dispatchers.IO) {
+        val dir = VdubPaths.projectDir(project)
+        if (dir.exists()) dir.deleteRecursively()
+        clipDao.clear(project)
+        projectDao.delete(project)
+        VdubPaths.ensureProject(project)
     }
 
     // ------------------------------------------------------- Step 2: speakers

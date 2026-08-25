@@ -62,6 +62,10 @@ class Step1ViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             VdubPaths.ensureRoots()
+            // Deliberately do NOT open a project here. Auto-loading "vdub_step"
+            // meant a previous run's video, SRT and clips reappeared on launch
+            // with no way to tell they were stale. The user picks or creates
+            // one via Open / Resume.
             _state.update {
                 it.copy(
                     knownProjects = VdubPaths.listProjects(),
@@ -69,14 +73,61 @@ class Step1ViewModel @Inject constructor(
                     storagePath = VdubPaths.projectsRoot.absolutePath
                 )
             }
-            loadProject(_state.value.projectName)
         }
     }
 
     // ------------------------------------------------------------- project
 
+    /**
+     * Editing the name detaches from whatever was loaded — otherwise the old
+     * project's video and clips stay on screen under a new name.
+     */
     fun setProjectName(name: String) {
-        _state.update { it.copy(projectName = name) }
+        _state.update {
+            if (name == it.projectName) it
+            else Step1UiState(
+                projectName = name,
+                knownProjects = it.knownProjects,
+                storageShared = it.storageShared,
+                storagePath = it.storagePath,
+                mergeGapMs = it.mergeGapMs
+            )
+        }
+    }
+
+    /** Wipe this project's files and start over. */
+    fun resetProject() = launchJob("Clearing project") {
+        val name = _state.value.projectName
+        repo.resetProject(name)
+        _state.update {
+            Step1UiState(
+                projectName = name,
+                knownProjects = VdubPaths.listProjects(),
+                storageShared = VdubPaths.usingSharedStorage,
+                storagePath = VdubPaths.projectDir(name).absolutePath,
+                mergeGapMs = it.mergeGapMs,
+                job = JobState.Done("Project cleared", name)
+            )
+        }
+    }
+
+    /** Drop just the video, keeping subtitles. */
+    fun clearVideo() = launchJob("Removing video") {
+        val name = _state.value.projectName
+        repo.clearVideo(name)
+        _state.update {
+            it.copy(
+                videoPath = null,
+                videoSource = VideoSource.NONE,
+                durationMs = 0L,
+                videoSizeBytes = 0L,
+                sourceUrl = "",
+                clipCount = 0,
+                clipsSizeBytes = 0L,
+                step1Done = false,
+                job = JobState.Done("Video removed", "pick another")
+            )
+        }
     }
 
     /** Resume-safe: pull whatever already exists on disk + in Room. */

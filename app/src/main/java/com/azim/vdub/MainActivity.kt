@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +40,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -341,6 +344,29 @@ fun Step1Screen(
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
+    var confirmReset by remember { mutableStateOf(false) }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Clear \"${state.projectName}\"?") },
+            text = {
+                Text(
+                    "Deletes the video, subtitles, clips and all step results " +
+                        "for this project. Downloaded models are not touched."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    vm.resetProject()
+                }) { Text("Clear") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     // ---- permissions ----
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -483,6 +509,24 @@ fun Step1Screen(
                                 .height(44.dp),
                             shape = RoundedCornerShape(12.dp)
                         ) { Text("Open / Resume") }
+                        OutlinedButton(
+                            onClick = { confirmReset = true },
+                            enabled = !state.busy,
+                            modifier = Modifier.height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) { Text("Clear all") }
+                    }
+                    if (!state.hasVideo && !state.hasSubtitles && state.clipCount == 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Nothing loaded. Type a name and press Open / Resume, " +
+                                "or just pick a video below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     if (state.knownProjects.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
@@ -499,6 +543,9 @@ fun Step1Screen(
             item {
                 VideoUploadSection(
                     hasVideo = state.hasVideo,
+                    videoLabel = "input_video.mp4 · ${humanBytes(state.videoSizeBytes)}" +
+                        if (state.durationMs > 0) " · %.1f min".format(state.durationMinutes)
+                        else "",
                     url = state.sourceUrl,
                     busy = state.busy,
                     onPickGallery = { videoPicker.launch(arrayOf("video/*")) },
@@ -512,7 +559,8 @@ fun Step1Screen(
                             ?.let(vm::setSourceUrl)
                     },
                     onUrlChange = vm::setSourceUrl,
-                    onDownload = vm::downloadVideo
+                    onDownload = vm::downloadVideo,
+                    onClearVideo = vm::clearVideo
                 )
             }
 
