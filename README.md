@@ -14,7 +14,7 @@ video → subtitles → per-line clips → speakers → emotion → translation 
 | 2 | Speaker diarization (CAM++) | ✅ done |
 | 3 | Emotion detection (emotion2vec+) | ✅ done |
 | 4 | Translation (NLLB-200) | model wired, stage next |
-| 5 | Voice + mux (Chatterbox ONNX) | model wired, stage next |
+| 5 | Voice + mux (Chatterbox) | two engines wired, stage next |
 
 ---
 
@@ -40,8 +40,8 @@ each stage closes its ONNX session before the next opens.
 
 | | |
 |---|---|
-| Disk — the models you need | **1.72 GB** |
-| **Peak RAM** | **591 MB** analysis · **~1.1 GB** while speaking |
+| Disk — the models you need | **1.72 GB** (Q4 voice) / 2.40 GB (mix) |
+| **Peak RAM** | **591 MB** analysis · **1.1–1.6 GB** while speaking |
 
 A unit test pins that invariant so it cannot quietly regress.
 
@@ -58,7 +58,8 @@ with size, licence, purpose, disk used and free space.
 | SenseVoice ASR | 237 MB | Transcribe | no — only if you have no SRT |
 | emotion2vec+ base | 355 MB | Emotion | yes |
 | NLLB-200 distilled 600M | 591 MB | Translate | yes · CC-BY-NC |
-| Chatterbox Multilingual q4 (voice cloning) | 791 MB | Voice | yes · MIT |
+| Chatterbox Q4 (small + fast) | 791 MB | Voice | one of two · MIT |
+| Chatterbox mix (Q4 LLM) | 1487 MB | Voice | one of two · MIT |
 | Chatterbox Hindi INT8 (PyTorch) | 628 MB | Voice | no — not runnable yet |
 
 Every file has two mirrors (huggingface.co and hf-mirror.com), transfers are
@@ -188,6 +189,37 @@ sad 0.9×.
 
 ---
 
+## Voice engines — pick one
+
+Two Chatterbox packs, selectable in **Settings → Voice engine**. Only the
+selected one is downloaded and loaded, so peak RAM is one engine, never both.
+
+| | Q4 | mix |
+|---|---|---|
+| Download | **791 MB** | 1487 MB |
+| RAM while speaking | ~1.1 GB | ~1.6 GB |
+| speech_encoder (clone identity) | Q4 | **FP32** |
+| conditional_decoder (audio) | Q4 | **FP32** |
+| language_model | Q4 | Q4 |
+
+The split is deliberate. The encoder reads the reference clip and fixes *who*
+the voice sounds like; the decoder turns tokens into the waveform and fixes
+*how good* it sounds. The language model is where the weight actually sits
+(1984 MB → 337 MB), so quantizing only it halves the download while leaving the
+voice-carrying parts untouched.
+
+Two implementation details worth knowing:
+
+- **Separate folders.** Both packs use identical filenames for entirely
+  different weights, so sharing a folder would have one silently overwrite the
+  other.
+- **`language_model_q4.onnx` keeps its upstream name** in the mix pack. An
+  external-data graph hardcodes its `.onnx_data` filename, so renaming it fails
+  at load time rather than at download time.
+
+Both need `repetition_penalty = 1.2` — the upstream default of 2.0 makes the
+quantized language model loop forever.
+
 ## Step 4 — Translation
 
 **Uploading your own translation is the primary path** — it skips machine
@@ -308,11 +340,9 @@ CI builds the APK on every push and republishes the `step1-latest` release.
   which ONNX Runtime can execute. `onnx-community/chatterbox-multilingual-ONNX`
   `verify01234/chatterbox-multilingual-ONNX-q4` is the same model family with a
   real ONNX export, includes Hindi, and keeps zero-shot cloning and exaggeration
-  control. It is the **single-file** q4 build — the upstream export splits
-  weights into `.onnx_data` sidecars that must sit beside their graph, which is
-  fragile across the app's two storage roots, and is nearly twice the size. The
-  lite entry is kept but marked optional and not runnable.
-- **Speaking is the heavy stage** — about 1.1 GB RAM and roughly a minute per
+  control. Two packs are offered — see [Voice engines](#voice-engines--pick-one).
+  The lite entry is kept but marked optional and not runnable.
+- **Speaking is the heavy stage** — 1.1–1.6 GB RAM and roughly a minute per
   line on a phone CPU, versus 591 MB for everything before it. Generation must
   use `repetition_penalty = 1.2`; the upstream default of 2.0 makes this
   quantized build loop forever.
