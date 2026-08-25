@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.core.VdubPaths
+import com.azim.vdub.data.local.VoicePrefs
 import com.azim.vdub.net.ModelDownloader
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -29,7 +30,8 @@ data class SettingsUiState(
     val storageShared: Boolean = true,
     val modelsPath: String = "",
     val freeBytes: Long = 0L,
-    val busyId: String? = null
+    val busyId: String? = null,
+    val voiceEngineId: String = "chatterbox_q4"
 ) {
     val installedCount: Int get() = rows.count { it.installed }
     val totalInstalledBytes: Long get() = rows.sumOf { it.installedBytes }
@@ -39,7 +41,8 @@ data class SettingsUiState(
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val downloader: ModelDownloader
+    private val downloader: ModelDownloader,
+    private val voicePrefs: VoicePrefs
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
@@ -47,7 +50,18 @@ class SettingsViewModel @Inject constructor(
 
     private var job: Job? = null
 
-    init { refresh() }
+    init {
+        refresh()
+        viewModelScope.launch {
+            voicePrefs.engineId.collect { id ->
+                _state.update { it.copy(voiceEngineId = id) }
+            }
+        }
+    }
+
+    fun selectVoiceEngine(id: String) = viewModelScope.launch {
+        voicePrefs.setEngine(id)
+    }
 
     fun refresh() {
         val rows = ModelCatalog.ALL.map { m ->
@@ -67,8 +81,23 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Refuse rather than fill the disk and fail halfway through. */
+    fun hasRoomFor(model: ModelCatalog.Model): Boolean {
+        val need = model.sizeBytes - downloader.installedBytes(model)
+        return _state.value.freeBytes <= 0L || _state.value.freeBytes > need * 11 / 10
+    }
+
     fun download(model: ModelCatalog.Model) {
         if (_state.value.busyId != null) return
+        if (!hasRoomFor(model)) {
+            patch(model.id) {
+                it.copy(
+                    error = "Not enough free space — needs about " +
+                        "${model.sizeMb} MB, ${_state.value.freeBytes / 1024 / 1024} MB free."
+                )
+            }
+            return
+        }
         job?.cancel()
         _state.update { it.copy(busyId = model.id) }
         patch(model.id) { it.copy(downloading = true, progress = -1f, error = null) }

@@ -110,13 +110,28 @@ class ModelCatalogTest {
 
     /** Sizes must not silently drift from what is really hosted. */
     @Test
-    fun `chatterbox onnx totals roughly its declared size`() {
-        val m = ModelCatalog.byId("chatterbox_onnx")!!
-        val parts = m.files.sumOf { it.approxBytes }
-        assertTrue(
-            "declared ${m.sizeMb} MB vs parts ${parts / 1024 / 1024} MB",
-            parts in (m.sizeBytes * 9 / 10)..(m.sizeBytes * 11 / 10)
-        )
+    fun `voice engine sizes match the sum of their files`() {
+        ModelCatalog.VOICE_ENGINES.forEach { m ->
+            val parts = m.files.sumOf { it.approxBytes }
+            assertTrue(
+                "${m.id}: declared ${m.sizeMb} MB vs parts ${parts / 1024 / 1024} MB",
+                parts in (m.sizeBytes * 9 / 10)..(m.sizeBytes * 11 / 10)
+            )
+        }
+    }
+
+    /**
+     * Peak RAM is one engine, never both — they are mutually exclusive, so
+     * loading is sequential and the ceiling is the larger of the two.
+     */
+    @Test
+    fun `peak voice ram is the larger engine, not the sum`() {
+        val engines = ModelCatalog.VOICE_ENGINES
+        val sum = engines.sumOf { it.ramBytes }
+        val peak = engines.maxOf { it.ramBytes }
+        assertTrue(peak < sum)
+        assertEquals(peak, ModelCatalog.forStage(ModelCatalog.Stage.TTS)
+            .filter { it.runnable }.maxOf { it.ramBytes })
     }
 
     @Test
@@ -152,10 +167,70 @@ class ModelCatalogTest {
      * can never run.
      */
     @Test
-    fun `a runnable voice model exists`() {
-        val runnable = ModelCatalog.forStage(ModelCatalog.Stage.TTS).filter { it.runnable }
-        assertTrue("no runnable TTS", runnable.isNotEmpty())
-        assertEquals("chatterbox_onnx", runnable.first().id)
+    fun `both voice engines are runnable and distinct`() {
+        val engines = ModelCatalog.VOICE_ENGINES
+        assertEquals(2, engines.size)
+        assertEquals(listOf("chatterbox_q4", "chatterbox_mix"), engines.map { it.id })
+        assertTrue(engines.all { it.runnable })
+        assertEquals(engines.size, engines.map { it.id }.distinct().size)
+    }
+
+    /**
+     * The two packs use identical filenames for entirely different weights, so
+     * they must live in separate folders or one silently overwrites the other.
+     */
+    @Test
+    fun `voice engines do not share any file path`() {
+        val (a, b) = ModelCatalog.VOICE_ENGINES
+        val pathsA = a.files.map { it.localName }.toSet()
+        val pathsB = b.files.map { it.localName }.toSet()
+        assertTrue("packs overlap: ${pathsA intersect pathsB}", (pathsA intersect pathsB).isEmpty())
+    }
+
+    /** Each pack must ship the four graphs the pipeline runs. */
+    @Test
+    fun `each voice engine ships all four graphs`() {
+        ModelCatalog.VOICE_ENGINES.forEach { engine ->
+            val leaf = engine.files.map { it.localName.substringAfterLast('/') }
+            listOf("embed_tokens.onnx", "speech_encoder.onnx", "conditional_decoder.onnx")
+                .forEach { g -> assertTrue("${engine.id} missing $g", leaf.contains(g)) }
+            assertTrue(
+                "${engine.id} has no language model",
+                leaf.any { it.startsWith("language_model") }
+            )
+            assertTrue("${engine.id} has no tokenizer", leaf.contains("tokenizer.json"))
+        }
+    }
+
+    /**
+     * In the mix pack only the language model is quantized; the graphs that
+     * decide clone identity and audio quality must stay full precision, which
+     * shows up as their FP32 sidecar sizes.
+     */
+    @Test
+    fun `mix pack keeps encoder and decoder full precision`() {
+        val mix = ModelCatalog.byId("chatterbox_mix")!!
+        fun bytesOf(prefix: String) = mix.files
+            .filter { it.localName.substringAfterLast('/').startsWith(prefix) }
+            .sumOf { it.approxBytes }
+
+        assertTrue("encoder looks quantized", bytesOf("speech_encoder") > 500_000_000L)
+        assertTrue("decoder looks quantized", bytesOf("conditional_decoder") > 400_000_000L)
+        // and the LLM is the one that shrank
+        assertTrue("llm not quantized", bytesOf("language_model") < 400_000_000L)
+    }
+
+    /**
+     * An external-data graph hardcodes its sidecar filename, so the local name
+     * must keep the upstream spelling — renaming language_model_q4 would break
+     * loading at run time, not at download time.
+     */
+    @Test
+    fun `mix pack keeps upstream language model filename`() {
+        val mix = ModelCatalog.byId("chatterbox_mix")!!
+        val names = mix.files.map { it.localName.substringAfterLast('/') }
+        assertTrue(names.contains("language_model_q4.onnx"))
+        assertTrue(names.contains("language_model_q4.onnx_data"))
     }
 
     /**
@@ -217,7 +292,8 @@ class ModelCatalogTest {
         assertEquals(ModelCatalog.Runtime.SAFETENSORS, cb.runtime)
         assertTrue(!cb.runnable)
 
-        listOf("campplus", "emotion2vec", "nllb", "sensevoice", "chatterbox_onnx").forEach {
+        listOf("campplus", "emotion2vec", "nllb", "sensevoice",
+            "chatterbox_q4", "chatterbox_mix").forEach {
             assertTrue("$it should be runnable", ModelCatalog.byId(it)!!.runnable)
         }
     }

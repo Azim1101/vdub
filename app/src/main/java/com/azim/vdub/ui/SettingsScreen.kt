@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -25,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,7 +98,8 @@ fun SettingsScreen(
                                 "analysis steps, not the " +
                                 "${mb(ModelCatalog.totalBytes)} total on disk. " +
                                 "Voice cloning is the heavy one " +
-                                "(~${mb(ModelCatalog.CHATTERBOX_ONNX.ramBytes)}).",
+                                "(~${mb(ModelCatalog.VOICE_ENGINES.minOf { e -> e.ramBytes })}" +
+                                "–${mb(ModelCatalog.VOICE_ENGINES.maxOf { e -> e.ramBytes })}).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -139,6 +142,15 @@ fun SettingsScreen(
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
+                if (stage == ModelCatalog.Stage.TTS) {
+                    item {
+                        VoiceEnginePicker(
+                            selectedId = state.voiceEngineId,
+                            rows = state.rows,
+                            onSelect = vm::selectVoiceEngine
+                        )
+                    }
+                }
                 rows.forEach { row ->
                     item(key = row.model.id) {
                         ModelCard(
@@ -155,6 +167,93 @@ fun SettingsScreen(
             item { Spacer(Modifier.height(24.dp)) }
         }
     }
+}
+
+/**
+ * Choose which Chatterbox pack the voice stage uses. Only the selected one is
+ * ever loaded, so the RAM ceiling is one engine, not both.
+ */
+@Composable
+private fun VoiceEnginePicker(
+    selectedId: String,
+    rows: List<ModelRow>,
+    onSelect: (String) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Voice engine", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Only the selected engine is downloaded and loaded.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+
+            ModelCatalog.VOICE_ENGINES.forEach { engine ->
+                val selected = engine.id == selectedId
+                val installed = rows.firstOrNull { it.model.id == engine.id }?.installed == true
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    else MaterialTheme.colorScheme.surface.copy(alpha = 0.4f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .clickable { onSelect(engine.id) }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = selected, onClick = { onSelect(engine.id) })
+                        Spacer(Modifier.width(6.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                engine.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                engineBlurb(engine.id, engine.sizeMb),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (installed) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = "installed",
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Never let the selection imply readiness it does not have.
+            val selectedRow = rows.firstOrNull { it.model.id == selectedId }
+            if (selectedRow != null && !selectedRow.installed) {
+                Text(
+                    "Selected engine is not downloaded yet — get it below before " +
+                        "running the voice step.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+    }
+}
+
+private fun engineBlurb(id: String, sizeMb: Int): String = when (id) {
+    "chatterbox_mix" -> "Recommended · ~$sizeMb MB · LLM Q4, clone + vocoder FP32"
+    else -> "Smallest · ~$sizeMb MB · everything Q4, quickest"
 }
 
 @Composable
