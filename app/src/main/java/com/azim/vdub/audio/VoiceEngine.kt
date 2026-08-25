@@ -54,33 +54,62 @@ object VoiceEngine {
             ?: ModelCatalog.VOICE_ENGINES.first()
 
     /**
+     * Catalog-relative names for a pack, e.g. "chatterbox_mix/language_model_q4.onnx".
+     *
+     * Kept free of Android APIs so the naming rules — which is what actually
+     * differs between the packs — are unit testable without a device.
+     */
+    data class Names(
+        val embedTokens: String,
+        val languageModel: String,
+        val speechEncoder: String,
+        val conditionalDecoder: String,
+        val tokenizer: String,
+        val cangjie: String,
+        val defaultVoice: String
+    ) {
+        val graphs: List<String>
+            get() = listOf(embedTokens, languageModel, speechEncoder, conditionalDecoder)
+    }
+
+    fun namesFor(id: String): Names {
+        val model = byId(id)
+        val all = model.files.map { it.localName }
+        fun leaf(exact: String) = all.firstOrNull { it.substringAfterLast('/') == exact }
+            ?: "${folderOf(model)}/$exact"
+        return Names(
+            embedTokens = leaf("embed_tokens.onnx"),
+            // the mix pack ships language_model_q4.onnx; its sidecar reference
+            // is baked into the graph, so the upstream name must survive
+            languageModel = all.first {
+                val n = it.substringAfterLast('/')
+                n.startsWith("language_model") && n.endsWith(".onnx")
+            },
+            speechEncoder = leaf("speech_encoder.onnx"),
+            conditionalDecoder = leaf("conditional_decoder.onnx"),
+            tokenizer = leaf("tokenizer.json"),
+            cangjie = leaf("Cangjie5_TC.json"),
+            defaultVoice = leaf("default_voice.wav")
+        )
+    }
+
+    /**
      * Resolve on-disk paths for [id]. Filenames come from the catalog rather
      * than being hardcoded, so a catalog change cannot silently desync from
      * what the loader looks for.
      */
     fun pathsFor(id: String): Paths {
-        val model = byId(id)
-        fun pick(suffix: String): File {
-            val name = model.files.map { it.localName }
-                .firstOrNull { it.substringAfterLast('/') == suffix }
-                ?: model.files.map { it.localName }
-                    .firstOrNull { it.substringAfterLast('/').startsWith(suffix.removeSuffix(".onnx")) }
-                ?: "${folderOf(model)}/$suffix"
-            return File(VdubPaths.modelsDir, name)
-        }
-
-        val languageModelName = model.files.map { it.localName }
-            .first { it.substringAfterLast('/').startsWith("language_model") }
-
+        val n = namesFor(id)
+        val root = VdubPaths.modelsDir
         return Paths(
-            model = model,
-            embedTokens = pick("embed_tokens.onnx"),
-            languageModel = File(VdubPaths.modelsDir, languageModelName),
-            speechEncoder = pick("speech_encoder.onnx"),
-            conditionalDecoder = pick("conditional_decoder.onnx"),
-            tokenizer = pick("tokenizer.json"),
-            cangjie = pick("Cangjie5_TC.json"),
-            defaultVoice = pick("default_voice.wav")
+            model = byId(id),
+            embedTokens = File(root, n.embedTokens),
+            languageModel = File(root, n.languageModel),
+            speechEncoder = File(root, n.speechEncoder),
+            conditionalDecoder = File(root, n.conditionalDecoder),
+            tokenizer = File(root, n.tokenizer),
+            cangjie = File(root, n.cangjie),
+            defaultVoice = File(root, n.defaultVoice)
         )
     }
 
