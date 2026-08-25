@@ -365,4 +365,11 @@ object ModelCatalog {
     /** Peak across the stages that actually run today (ONNX only). */
     val peakRunnableRamBytes: Long get() =
         ALL.filter { it.runnable }.maxOf { it.ramBytes }
+
+    /**
+     * Peak for everything before speaking. These run over every clip, so they
+     * are the figure that matters for day-to-day use.
+     */
+    val peakAnalysisRamBytes: Long get() =
+        ALL.filter { it.runnable && it.stage != Stage.TTS }.maxOf { it.ramBytes }
 }

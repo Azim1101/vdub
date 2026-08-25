@@ -92,10 +92,11 @@ fun SettingsScreen(
                         Text(
                             "No server, no account. Stages run one at a time, so " +
                                 "only one model is in memory at once — about " +
-                                "${mb(ModelCatalog.peakRunnableRamBytes)} for steps " +
-                                "1–4, not the ${mb(ModelCatalog.totalBytes)} total " +
-                                "on disk. Voice cloning is heavier " +
-                                "(~${mb(ModelCatalog.CHATTERBOX_HI.ramBytes)}).",
+                                "${mb(ModelCatalog.peakAnalysisRamBytes)} for the " +
+                                "analysis steps, not the " +
+                                "${mb(ModelCatalog.totalBytes)} total on disk. " +
+                                "Voice cloning is the heavy one " +
+                                "(~${mb(ModelCatalog.CHATTERBOX_ONNX.ramBytes)}).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

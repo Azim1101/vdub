@@ -56,13 +56,33 @@ class ModelCatalogTest {
         assertTrue(ModelCatalog.peakRamBytes < ModelCatalog.totalBytes)
     }
 
-    /** Steps 1-4 must stay comfortable on a 6 GB phone. */
+    /**
+     * Analysis stages (everything before speaking) must stay light — those run
+     * over all 190 clips, so a heavy one would be felt on every line.
+     */
     @Test
-    fun `runnable stages stay under 1gb`() {
-        assertTrue(
-            "peak ${ModelCatalog.peakRunnableRamBytes / 1024 / 1024} MB too big",
-            ModelCatalog.peakRunnableRamBytes < 1_000_000_000L
-        )
+    fun `analysis stages stay under 1gb`() {
+        val analysis = ModelCatalog.ALL
+            .filter { it.runnable && it.stage != ModelCatalog.Stage.TTS }
+        assertTrue(analysis.isNotEmpty())
+        val peak = analysis.maxOf { it.ramBytes }
+        assertTrue("peak ${peak / 1024 / 1024} MB too big", peak < 1_000_000_000L)
+    }
+
+    /**
+     * Speaking is the heavy stage and always will be. It must still fit a
+     * 6 GB phone with room for the OS and the app itself.
+     */
+    @Test
+    fun `voice stage fits a 6gb phone`() {
+        val tts = ModelCatalog.forStage(ModelCatalog.Stage.TTS).filter { it.runnable }
+        assertTrue(tts.isNotEmpty())
+        tts.forEach {
+            assertTrue(
+                "${it.id} needs ${it.ramMb} MB",
+                it.ramBytes < 2_500_000_000L
+            )
+        }
     }
 
     /**
