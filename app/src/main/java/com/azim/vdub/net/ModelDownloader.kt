@@ -205,6 +205,16 @@ class ModelDownloader @Inject constructor() {
                 if (!asText.startsWith("{") && !asText.startsWith("[")) {
                     error("not valid JSON")
                 }
+            // .npz is a zip archive: "PK\003\004", or "PK\005\006" when empty.
+            // Worth checking — DhVaani's mel filterbank and vocoder head are
+            // npz, and a truncated one fails much later as a shape mismatch
+            // deep inside the vocoder.
+            ModelCatalog.Kind.NPZ ->
+                if (head.size < 4 || head[0] != 'P'.code.toByte() ||
+                    head[1] != 'K'.code.toByte()
+                ) {
+                    error("not a valid .npz archive (bad header)")
+                }
             ModelCatalog.Kind.TEXT, ModelCatalog.Kind.BIN,
             ModelCatalog.Kind.ONNX_DATA -> Unit
         }

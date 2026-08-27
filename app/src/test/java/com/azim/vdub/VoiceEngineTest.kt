@@ -46,15 +46,18 @@ class VoiceEngineTest {
         assertNotEquals(a.speechEncoder, b.speechEncoder)
     }
 
+    /** Chatterbox resolves four graphs plus a tokenizer, all from the catalog. */
     @Test
-    fun `every resolved graph is declared in the catalog`() {
-        ModelCatalog.VOICE_ENGINES.forEach { engine ->
-            val declared = engine.files.map { it.localName }.toSet()
-            val n = VoiceEngine.namesFor(engine.id)
-            (n.graphs + n.tokenizer).forEach { rel ->
-                assertTrue("${engine.id}: $rel not in catalog", declared.contains(rel))
+    fun `every resolved chatterbox graph is declared in the catalog`() {
+        ModelCatalog.VOICE_ENGINES
+            .filter { VoiceEngine.kindOf(it.id) == VoiceEngine.Kind.CHATTERBOX }
+            .forEach { engine ->
+                val declared = engine.files.map { it.localName }.toSet()
+                val n = VoiceEngine.namesFor(engine.id)
+                (n.graphs + n.tokenizer).forEach { rel ->
+                    assertTrue("${engine.id}: $rel not in catalog", declared.contains(rel))
+                }
             }
-        }
     }
 
     /** An unknown id must not crash the voice stage. */
@@ -73,14 +76,66 @@ class VoiceEngineTest {
         assertTrue(VoiceEngine.REPETITION_PENALTY < 2.0f)
     }
 
-    /** Each pack resolves a full set of graphs, none left as a bare guess. */
+    /** Each Chatterbox pack resolves a full set of graphs, none left as a guess. */
     @Test
-    fun `every engine resolves a complete graph set`() {
+    fun `every chatterbox engine resolves a complete graph set`() {
+        ModelCatalog.VOICE_ENGINES
+            .filter { VoiceEngine.kindOf(it.id) == VoiceEngine.Kind.CHATTERBOX }
+            .forEach { engine ->
+                val n = VoiceEngine.namesFor(engine.id)
+                assertEquals(4, n.graphs.size)
+                assertTrue(n.graphs.all { it.contains('/') })
+                assertTrue(n.tokenizer.endsWith("tokenizer.json"))
+            }
+    }
+
+    /**
+     * Every engine must be recognised. A new catalog entry that nothing maps
+     * to would silently open as Chatterbox and fail on a missing graph.
+     */
+    @Test
+    fun `every catalog engine has a kind`() {
+        assertEquals(
+            VoiceEngine.Kind.DHVAANI,
+            VoiceEngine.kindOf(ModelCatalog.DHVAANI_TTS.id)
+        )
+        assertEquals(
+            VoiceEngine.Kind.INDRI,
+            VoiceEngine.kindOf(ModelCatalog.INDRI_TTS.id)
+        )
         ModelCatalog.VOICE_ENGINES.forEach { engine ->
-            val n = VoiceEngine.namesFor(engine.id)
-            assertEquals(4, n.graphs.size)
-            assertTrue(n.graphs.all { it.contains('/') })
-            assertTrue(n.tokenizer.endsWith("tokenizer.json"))
+            // Does not throw, and Chatterbox stays the default only for the
+            // two packs that really are Chatterbox.
+            val kind = VoiceEngine.kindOf(engine.id)
+            if (kind == VoiceEngine.Kind.CHATTERBOX) {
+                assertTrue(
+                    "${engine.id} resolved to CHATTERBOX",
+                    engine.id.startsWith("chatterbox")
+                )
+            }
         }
+    }
+
+    /**
+     * The engine list is what Settings renders and what `speakAll` opens, so
+     * every entry must be reachable through [VoiceEngine.byId] by its own id —
+     * a typo would silently hand the user a different engine.
+     */
+    @Test
+    fun `every engine resolves to itself by id`() {
+        ModelCatalog.VOICE_ENGINES.forEach { engine ->
+            assertEquals(engine.id, VoiceEngine.byId(engine.id).id)
+        }
+    }
+
+    /** Only Indri lacks cloning; that flag drives the Step 5 warning. */
+    @Test
+    fun `cloning engines exclude indri and nothing else`() {
+        val cloning = ModelCatalog.CLONING_ENGINES.map { it.id }
+        assertTrue(ModelCatalog.CHATTERBOX_Q4.id in cloning)
+        assertTrue(ModelCatalog.CHATTERBOX_MIX.id in cloning)
+        assertTrue(ModelCatalog.DHVAANI_TTS.id in cloning)
+        assertTrue(ModelCatalog.INDRI_TTS.id !in cloning)
+        assertEquals(ModelCatalog.VOICE_ENGINES.size - 1, cloning.size)
     }
 }

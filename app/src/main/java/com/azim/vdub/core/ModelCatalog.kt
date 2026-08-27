@@ -74,10 +74,13 @@ object ModelCatalog {
         val kind: Kind = Kind.ONNX
     )
 
-    enum class Kind { ONNX, ONNX_DATA, JSON, TEXT, BIN }
+    enum class Kind { ONNX, ONNX_DATA, JSON, TEXT, BIN, NPZ }
 
     private const val CB_Q4 = "verify01234/chatterbox-multilingual-ONNX-q4"
     private const val CB_MIX = "onnx-community/chatterbox-multilingual-ONNX"
+    private const val DHVAANI = "Bbkblo/DhVaani-0.5-ONNX"
+    private const val INDRI = "Bbkblo/indri-0.1-124m-tts-ONNX"
+    private const val MIMI = "onnx-community/kyutai-mimi-ONNX"
 
     private fun hf(repo: String, path: String): List<String> = listOf(
         "https://huggingface.co/$repo/resolve/main/$path?download=true",
@@ -341,6 +344,119 @@ object ModelCatalog {
         runtimeRamBytes = 1_600_000_000L
     )
 
+    /**
+     * Voice engine C — DhVaani 0.5, a ZipVoice flow-matching model for Indic
+     * languages (ARTPARK-IISc), exported to ONNX.
+     *
+     * The interesting one for this project: 183 MB against Chatterbox's 830,
+     * and it generates *faster than real time* (RTF 0.84 at 4 sampling steps
+     * on two CPU cores) because there is no autoregressive loop — the whole
+     * utterance is denoised in a fixed number of passes. Chatterbox spends a
+     * minute a line emitting speech tokens one at a time.
+     *
+     * Three graphs, run once per line:
+     *   text_encoder  tokens + reference tokens -> a (1, T, 100) mel plan
+     *   fm_decoder    one Euler step of the flow; called `steps` times
+     *   vocoder       mel -> waveform, via a Vocos ISTFT head
+     *
+     * Two files are numpy archives rather than graphs, which is why [Kind.NPZ]
+     * exists: `vocos_head.npz` holds the final linear layer and ISTFT window,
+     * and `mel_fb.npz` the exact torchaudio-HTK filterbank. The filterbank is
+     * not optional — recomputing it from a formula gives subtly different mel
+     * bins, and the reference clip then encodes to features the model reads as
+     * a different voice.
+     *
+     * Cloning is zero-shot but conditions on the reference *text* as well as
+     * its audio, so [TtsEngine.enrol] takes a transcript here.
+     */
+    val DHVAANI_TTS = Model(
+        id = "dhvaani",
+        name = "DhVaani 0.5 (Indic, fast)",
+        stage = Stage.TTS,
+        sizeBytes = 191_000_000L,
+        description = "Zero-shot cloning for 13 Indic languages. Six times " +
+            "smaller than Chatterbox and faster than real time.",
+        license = "Apache-2.0 (ARTPARK-IISc / ZipVoice)",
+        note = "Recommended for Hindi. ~600 MB RAM, no watermark.",
+        required = false,
+        files = listOf(
+            ModelFile("dhvaani/text_encoder.onnx",
+                hf(DHVAANI, "text_encoder_int8.onnx"), 6_131_125L),
+            ModelFile("dhvaani/fm_decoder.onnx",
+                hf(DHVAANI, "fm_decoder_int8.onnx"), 124_752_448L),
+            ModelFile("dhvaani/vocoder_backbone.onnx",
+                hf(DHVAANI, "vocoder_backbone.onnx"), 52_048_662L),
+            ModelFile("dhvaani/vocos_head.npz",
+                hf(DHVAANI, "vocos_head.npz"), 2_110_996L, Kind.NPZ),
+            ModelFile("dhvaani/mel_fb.npz",
+                hf(DHVAANI, "mel_fb.npz"), 210_546L, Kind.NPZ),
+            ModelFile("dhvaani/tokens.txt",
+                hf(DHVAANI, "tokens.txt"), 8_065L, Kind.TEXT)
+        ),
+        runtimeRamBytes = 600_000_000L
+    )
+
+    /**
+     * Voice engine D — Indri 0.1 (11mlabs), a 124M GPT-2 emitting Mimi codec
+     * tokens, decoded to audio by Kyutai's Mimi.
+     *
+     * Preset voices only. Indri conditions on a `[spkr_NN]` token, not on a
+     * reference clip, so unlike the other three it cannot reproduce the
+     * original actor — Step 5 says so before a three-hour run rather than
+     * after. It is here because it is small, and its Hindi preset speakers are
+     * natural.
+     *
+     * ### The decoder had to be repaired, not just downloaded
+     *
+     * Indri's own repo ships the language model only: Kyutai Mimi does not
+     * export to ONNX from transformers, so upstream points at llama.cpp for
+     * the waveform. There *is* a community ONNX export, but its decoder is
+     * frozen at 32 codebooks while Indri emits 8.
+     *
+     * Padding the other 24 with index 0 runs and sounds wrong — measured at
+     * 6.8 dB SNR against the 8-codebook decode upstream performs, in PyTorch,
+     * so it is not a quantization artefact. Mimi's residual quantizer decodes
+     * by summing one embedding per codebook, so those 24 add a constant
+     * vector C = Σ codebook_q[0] to every frame, and index 0 is an ordinary
+     * vector rather than silence.
+     *
+     * Index 0 is not required, though: any index is legal. Choosing the 24
+     * indices whose embeddings cancel drops ‖C‖ from 1.383 to 0.045 and the
+     * error to 34.4 dB — inaudible. Those indices are pinned in [MimiDecoder]
+     * and covered by a test.
+     *
+     * fp16 is used for the decoder: 34.41 dB versus 15.60 for int8 (whose
+     * quantization error alone exceeds the padding error), at half the size of
+     * fp32 and a third of int8's runtime.
+     */
+    val INDRI_TTS = Model(
+        id = "indri",
+        name = "Indri 0.1 (preset voices)",
+        stage = Stage.TTS,
+        sizeBytes = 488_000_000L,
+        description = "Small English/Hindi TTS with 13 preset speakers. Does " +
+            "not clone the original voice.",
+        license = "CC-BY-SA-4.0, research only (11mlabs) · Mimi CC-BY-4.0",
+        note = "No cloning, and slow: the exported graph has no KV cache, so " +
+            "every token re-runs the whole sequence.",
+        required = false,
+        files = listOf(
+            ModelFile("indri/indri_lm.onnx",
+                hf(INDRI, "indri_lm_int8.onnx"), 358_050_633L),
+            ModelFile("indri/vocab.json",
+                hf(INDRI, "vocab.json"), 798_156L, Kind.JSON),
+            ModelFile("indri/merges.txt",
+                hf(INDRI, "merges.txt"), 456_318L, Kind.TEXT),
+            ModelFile("indri/added_tokens.json",
+                hf(INDRI, "added_tokens.json"), 383_940L, Kind.JSON),
+            // fp16, not int8: int8's own error (15.6 dB) is worse than the
+            // padding it would be hiding.
+            ModelFile("indri/mimi_decoder.onnx",
+                hf(MIMI, "onnx/decoder_model_fp16.onnx"), 114_242_965L)
+        ),
+        runtimeRamBytes = 900_000_000L
+    )
+
     val CHATTERBOX_HI = Model(
         id = "chatterbox_hi",
         name = "Chatterbox Hindi INT8 (PyTorch, not runnable yet)",
@@ -396,11 +512,20 @@ object ModelCatalog {
 
     val ALL = listOf(
         CAMPPLUS, SENSEVOICE, EMOTION2VEC, NLLB,
-        CHATTERBOX_Q4, CHATTERBOX_MIX, CHATTERBOX_HI
+        CHATTERBOX_Q4, CHATTERBOX_MIX, DHVAANI_TTS, INDRI_TTS, CHATTERBOX_HI
     )
 
-    /** Selectable voice engines, in the order shown in Settings. */
-    val VOICE_ENGINES = listOf(CHATTERBOX_Q4, CHATTERBOX_MIX)
+    /**
+     * Selectable voice engines, in the order shown in Settings.
+     *
+     * Order is deliberate: the two cloning Chatterbox packs first, since they
+     * are what the pipeline was designed around, then DhVaani (also cloning,
+     * far smaller), then Indri last because it cannot clone at all.
+     */
+    val VOICE_ENGINES = listOf(CHATTERBOX_Q4, CHATTERBOX_MIX, DHVAANI_TTS, INDRI_TTS)
+
+    /** Engines that reproduce the original speaker rather than a preset. */
+    val CLONING_ENGINES = VOICE_ENGINES.filter { it.id != INDRI_TTS.id }
 
     fun byId(id: String): Model? = ALL.firstOrNull { it.id == id }
 

@@ -45,6 +45,8 @@ data class Step5UiState(
     val engineName: String = "",
     val engineInstalled: Boolean = false,
     val engineSizeMb: Int = 0,
+    /** False for a preset-voice engine, which cannot reproduce the actor. */
+    val engineClones: Boolean = true,
     val missingFiles: List<String> = emptyList(),
     val lines: List<SpeakerLine> = emptyList(),
     val speakers: List<SpeakerPlan> = emptyList(),
@@ -120,6 +122,7 @@ class Step5ViewModel @Inject constructor(
                 engineName = engine.name,
                 engineInstalled = downloader.isInstalled(engine),
                 engineSizeMb = engine.sizeMb,
+                engineClones = engineId in ModelCatalog.CLONING_ENGINES.map { m -> m.id },
                 missingFiles = paths.missing.map { f -> f.name },
                 lines = lines,
                 speakers = plans,

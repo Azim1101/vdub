@@ -599,7 +599,12 @@ fun Step5Screen(
                     onOpenSettings = onOpenSettings
                 )
             }
-            item { SpeakerVoiceSection(speakers = state.speakers) }
+            item {
+                SpeakerVoiceSection(
+                    speakers = state.speakers,
+                    clones = state.engineClones
+                )
+            }
             item {
                 GenerateVoiceSection(
                     total = state.total,

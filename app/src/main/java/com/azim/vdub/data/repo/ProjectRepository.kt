@@ -6,7 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.azim.vdub.audio.AudioExtractor
 import com.azim.vdub.audio.ClipCutter
-import com.azim.vdub.audio.ChatterboxTts
+import com.azim.vdub.audio.TtsEngine
 import com.azim.vdub.audio.DubTimeline
 import com.azim.vdub.audio.EmotionClassifier
 import com.azim.vdub.audio.VideoMuxer
@@ -828,8 +828,8 @@ class ProjectRepository @Inject constructor(
         val paths = VoiceEngine.pathsFor(engineId)
 
         var spoken = 0
-        ChatterboxTts.open(paths).use { tts ->
-            val voices = HashMap<String, ChatterboxTts.SpeakerVoice>()
+        VoiceEngine.open(engineId).use { tts ->
+            val voices = HashMap<String, TtsEngine.Voice>()
 
             lines.forEachIndexed { index, line ->
                 coroutineContext.ensureActive()
@@ -844,20 +844,7 @@ class ProjectRepository @Inject constructor(
                 }
 
                 val voice = voices.getOrPut(line.spk) {
-                    // Enrol from several of the speaker's clips joined together,
-                    // not just the longest one: a single short line carries far
-                    // less timbre, and this is the only thing the clone is built
-                    // from. Matches the reference seconds shown in the UI.
-                    val refs = referenceClipsFor(project, line.spk, limit = 3)
-                    val ref = when {
-                        refs.isNotEmpty() -> buildReference(project, line.spk, refs)
-                        paths.defaultVoice.exists() -> paths.defaultVoice
-                        else -> error(
-                            "No usable reference audio for ${line.spk} — its clips " +
-                                "are missing or too short to clone from."
-                        )
-                    }
-                    tts.enrol(ref)
+                    enrolSpeaker(project, line.spk, tts, paths)
                 }
 
                 val wav = tts.speak(
@@ -869,7 +856,11 @@ class ProjectRepository @Inject constructor(
                 WavIo.writePcm16(
                     target,
                     floatsToPcm16(wav),
-                    ChatterboxTts.SAMPLE_RATE,
+                    // Engines do not all run at the same rate, so the clip is
+                    // written at the rate it was actually generated at; the mux
+                    // stage resamples. Assuming one rate here silently
+                    // pitch-shifted every clip.
+                    tts.sampleRate,
                     1
                 )
                 spoken++
@@ -897,14 +888,32 @@ class ProjectRepository @Inject constructor(
         val video = VdubPaths.inputVideo(project)
         check(video.exists()) { "input_video.mp4 is missing" }
 
-        val sr = ChatterboxTts.SAMPLE_RATE
         onProgress("Loading clips", 0f)
+
+        // Read the rate off the clips rather than assuming one engine's.
+        // Every engine here happens to emit 24 kHz, but hardcoding that meant
+        // a future engine at another rate would mux at the wrong speed — a
+        // pitch shift, with nothing in the pipeline to catch it.
+        val firstClip = script.lines.asSequence()
+            .mapNotNull { line ->
+                line.utt.removePrefix("line_").toIntOrNull()
+                    ?.let { VdubPaths.hiClipFile(project, it) }
+            }
+            .firstOrNull { it.exists() && it.length() > WAV_MIN_BYTES }
+        check(firstClip != null) { "No spoken clips yet — run Speak first" }
+        val sr = WavIo.readFormat(firstClip).sampleRate
 
         val clips = script.lines.mapNotNull { line ->
             val id = line.utt.removePrefix("line_").toIntOrNull() ?: return@mapNotNull null
             val f = VdubPaths.hiClipFile(project, id)
             if (!f.exists() || f.length() <= WAV_MIN_BYTES) return@mapNotNull null
-            DubTimeline.Clip(id, line.start, line.end, readWavFloat(f))
+            // A clip written by a different engine before the user switched
+            // would otherwise be spliced in at the wrong speed.
+            val fmt = WavIo.readFormat(f)
+            val samples = readWavFloat(f).let {
+                if (fmt.sampleRate == sr) it else resampleLinear(it, fmt.sampleRate, sr)
+            }
+            DubTimeline.Clip(id, line.start, line.end, samples)
         }
         check(clips.isNotEmpty()) { "No spoken clips yet — run Speak first" }
 
@@ -930,6 +939,51 @@ class ProjectRepository @Inject constructor(
 
         VdubPaths.markStepDone(project, 6)
         out
+    }
+
+    /**
+     * Build one speaker's voice for whichever engine is loaded.
+     *
+     * Three engines clone from a reference clip and one does not, and one of
+     * the three also wants to know what the reference *says*. Rather than
+     * making the speaking loop branch on engine, the differences are resolved
+     * here.
+     */
+    private suspend fun enrolSpeaker(
+        project: String,
+        speaker: String,
+        tts: TtsEngine,
+        paths: VoiceEngine.Paths
+    ): TtsEngine.Voice {
+        // A preset-voice engine has nothing to read a clip for, and demanding
+        // one would fail a project whose clips are fine but short.
+        if (!tts.clonesVoice) return tts.enrol(null)
+
+        // Enrol from several of the speaker's clips joined together, not just
+        // the longest one: a single short line carries far less timbre, and
+        // this is the only thing the clone is built from. Matches the
+        // reference seconds shown in the UI.
+        val refs = referenceClipsFor(project, speaker, limit = 3)
+        val ref = when {
+            refs.isNotEmpty() -> buildReference(project, speaker, refs)
+            paths.defaultVoice.exists() -> paths.defaultVoice
+            else -> error(
+                "No usable reference audio for $speaker — its clips " +
+                    "are missing or too short to clone from."
+            )
+        }
+
+        // DhVaani conditions on the reference transcript as well as its audio.
+        // The source text of those exact clips is what was said in them, so it
+        // is joined in the same order buildReference concatenates them.
+        val transcript = if (refs.isEmpty()) "" else {
+            val byUtt = readSpeakerScript(project)?.lines.orEmpty()
+                .associateBy { it.utt }
+            refs.mapNotNull { byUtt[it.nameWithoutExtension]?.text?.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
+        }
+        return tts.enrol(ref, transcript)
     }
 
     /**

@@ -4,7 +4,6 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.ensureActive
-import java.io.Closeable
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
@@ -35,7 +34,10 @@ class ChatterboxTts private constructor(
     private val languageModel: OrtSession,
     private val conditionalDecoder: OrtSession,
     private val tokenizer: ChatterboxTokenizer
-) : Closeable {
+) : TtsEngine {
+
+    override val sampleRate = SAMPLE_RATE
+    override val clonesVoice = true
 
     companion object {
         const val SAMPLE_RATE = 24_000       // S3Gen output rate
@@ -107,7 +109,7 @@ class ChatterboxTts private constructor(
         internal val promptToken: Array<LongArray>,
         internal val refXVector: Array<FloatArray>,
         internal val promptFeat: Array<Array<FloatArray>>
-    )
+    ) : TtsEngine.Voice
 
     /**
      * Encode a reference clip into speaker conditioning.
@@ -116,7 +118,8 @@ class ChatterboxTts private constructor(
      * resampled here rather than at cut time — the analysis models need 16 kHz
      * and re-cutting for TTS would double the disk.
      */
-    fun enrol(referenceWav: File): SpeakerVoice {
+    override fun enrol(referenceWav: File?, transcript: String): SpeakerVoice {
+        requireNotNull(referenceWav) { "Chatterbox clones a voice — it needs a reference clip" }
         val audio = readWav24kMono(referenceWav)
         // Below about a second the encoder emits an empty prompt, which then
         // fails deep inside the decoder as a zero-dimension error rather than
@@ -152,13 +155,15 @@ class ChatterboxTts private constructor(
      * @param exaggeration delivery strength; Step 3's emotion maps to this.
      * @return 24 kHz mono samples in [-1, 1].
      */
-    suspend fun speak(
+    override suspend fun speak(
         text: String,
-        voice: SpeakerVoice,
-        language: String = "hi",
-        exaggeration: Float = 0.5f,
-        onToken: (Int) -> Unit = {}
+        voice: TtsEngine.Voice,
+        language: String,
+        exaggeration: Float,
+        onToken: (Int) -> Unit
     ): FloatArray {
+        val speaker = voice as? SpeakerVoice
+            ?: error("enrol() this engine's own voice — got ${voice.javaClass.simpleName}")
         val prepared = tokenizer.withLanguage(text.trim(), language)
         val inputIds = tokenizer.encode(prepared)
         require(inputIds.isNotEmpty()) { "nothing to speak" }
@@ -175,7 +180,7 @@ class ChatterboxTts private constructor(
             exaggeration
         )
         // Prepend speaker conditioning so the LLM is primed with the voice.
-        embeds = concatOnTime(voice.condEmb, embeds)
+        embeds = concatOnTime(speaker.condEmb, embeds)
 
         var seqLen = embeds[0].size
         var attention = LongArray(seqLen) { 1L }
@@ -212,11 +217,11 @@ class ChatterboxTts private constructor(
         // Drop the leading START and any trailing STOP, then prepend the
         // prompt tokens the encoder produced.
         val speech = generated.drop(1).toLongArray()
-        val full = LongArray(voice.promptToken[0].size + speech.size)
-        voice.promptToken[0].copyInto(full)
-        speech.copyInto(full, voice.promptToken[0].size)
+        val full = LongArray(speaker.promptToken[0].size + speech.size)
+        speaker.promptToken[0].copyInto(full)
+        speech.copyInto(full, speaker.promptToken[0].size)
 
-        return runDecoder(full, voice)
+        return runDecoder(full, speaker)
     }
 
     // ------------------------------------------------------------- graphs

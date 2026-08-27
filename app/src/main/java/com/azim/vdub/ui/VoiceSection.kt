@@ -144,21 +144,40 @@ fun VoiceEngineCard(
     }
 }
 
-/** Per-speaker reference audio — the thing clone quality actually depends on. */
+/**
+ * Per-speaker reference audio — the thing clone quality actually depends on.
+ *
+ * @param clones false for a preset-voice engine. The wording changes entirely
+ *        rather than being softened: with Indri selected these clips are not
+ *        used at all, and "cloned from their own clips" would be a lie the
+ *        user only discovers after a multi-hour run.
+ */
 @Composable
-fun SpeakerVoiceSection(speakers: List<SpeakerPlan>) {
+fun SpeakerVoiceSection(speakers: List<SpeakerPlan>, clones: Boolean = true) {
     if (speakers.isEmpty()) return
     SectionCard(
         number = "1",
-        title = "Voices to clone",
-        subtitle = "${speakers.size} speakers · cloned from their own clips",
-        done = speakers.none { it.referenceWeak }
+        title = if (clones) "Voices to clone" else "Voices to assign",
+        subtitle = if (clones) {
+            "${speakers.size} speakers · cloned from their own clips"
+        } else {
+            "${speakers.size} speakers · preset voices"
+        },
+        done = clones && speakers.none { it.referenceWeak }
     ) {
         Text(
-            "Each speaker is cloned zero-shot from their longest clips. More " +
-                "reference audio means a closer match.",
+            if (clones) {
+                "Each speaker is cloned zero-shot from their longest clips. More " +
+                    "reference audio means a closer match."
+            } else {
+                "This engine cannot clone. Each speaker gets a different preset " +
+                    "voice, kept consistent across their lines — but it will not " +
+                    "sound like the original actor. Switch to Chatterbox or " +
+                    "DhVaani in Settings to clone."
+            },
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (clones) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.tertiary
         )
         Spacer(Modifier.height(10.dp))
 
@@ -183,17 +202,21 @@ fun SpeakerVoiceSection(speakers: List<SpeakerPlan>) {
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        "${s.lineCount} lines · %.1f s from %d clip%s".format(
-                            s.referenceSeconds,
-                            s.referenceCount,
-                            if (s.referenceCount == 1) "" else "s"
-                        ),
+                        if (clones) {
+                            "${s.lineCount} lines · %.1f s from %d clip%s".format(
+                                s.referenceSeconds,
+                                s.referenceCount,
+                                if (s.referenceCount == 1) "" else "s"
+                            )
+                        } else {
+                            "${s.lineCount} lines · preset voice ${s.colorIndex + 1}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     // Name the exact clips, so a wrong speaker split is visible
                     // before a multi-hour run rather than after it.
-                    if (s.referenceNames.isNotEmpty()) {
+                    if (clones && s.referenceNames.isNotEmpty()) {
                         Text(
                             s.referenceNames.joinToString(", "),
                             style = MaterialTheme.typography.bodySmall,
@@ -212,7 +235,7 @@ fun SpeakerVoiceSection(speakers: List<SpeakerPlan>) {
                         )
                     }
                 }
-                if (s.referenceWeak) {
+                if (clones && s.referenceWeak) {
                     Icon(
                         Icons.Default.Warning,
                         contentDescription = "short reference",
@@ -223,7 +246,7 @@ fun SpeakerVoiceSection(speakers: List<SpeakerPlan>) {
             }
         }
 
-        if (speakers.any { it.referenceWeak }) {
+        if (clones && speakers.any { it.referenceWeak }) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "⚠ Some speakers have under 3 seconds of reference. Cloning will " +

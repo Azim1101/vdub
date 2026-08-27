@@ -170,8 +170,8 @@ fun SettingsScreen(
 }
 
 /**
- * Choose which Chatterbox pack the voice stage uses. Only the selected one is
- * ever loaded, so the RAM ceiling is one engine, not both.
+ * Choose which engine the voice stage uses. Only the selected one is ever
+ * downloaded and loaded, so the RAM ceiling is one engine, never the sum.
  */
 @Composable
 private fun VoiceEnginePicker(
@@ -252,8 +252,13 @@ private fun VoiceEnginePicker(
 }
 
 private fun engineBlurb(id: String, sizeMb: Int): String = when (id) {
-    "chatterbox_mix" -> "Recommended · ~$sizeMb MB · LLM Q4, clone + vocoder FP32"
-    else -> "Smallest · ~$sizeMb MB · everything Q4, quickest"
+    "chatterbox_mix" -> "Clones · ~$sizeMb MB · LLM Q4, clone + vocoder FP32"
+    "chatterbox_q4" -> "Clones · ~$sizeMb MB · everything Q4, smallest Chatterbox"
+    "dhvaani" -> "Clones · ~$sizeMb MB · 13 Indic languages, faster than real time"
+    // Stated first because it is the one thing a user must know before
+    // choosing this engine, and it cannot be inferred from the size.
+    "indri" -> "No cloning · ~$sizeMb MB · preset voices only, slow"
+    else -> "~$sizeMb MB"
 }
 
 @Composable

@@ -288,4 +288,103 @@ class ModelCatalogTest {
             )
         }
     }
+
+    // ------------------------------------------------ the added TTS engines
+
+    /**
+     * DhVaani's two numpy archives are not ONNX graphs, and declaring them as
+     * ONNX would make the downloader reject them for a bad protobuf header.
+     */
+    @Test
+    fun `npz files are declared as npz`() {
+        ModelCatalog.ALL.flatMap { it.files }
+            .filter { it.localName.endsWith(".npz") }
+            .also { assertTrue("no npz files declared", it.isNotEmpty()) }
+            .forEach { assertEquals(it.localName, ModelCatalog.Kind.NPZ, it.kind) }
+    }
+
+    @Test
+    fun `txt files are declared as text`() {
+        ModelCatalog.ALL.flatMap { it.files }
+            .filter { it.localName.endsWith(".txt") }
+            .forEach { assertEquals(it.localName, ModelCatalog.Kind.TEXT, it.kind) }
+    }
+
+    /**
+     * Every engine keeps its own folder. The four engines share leaf names
+     * (`vocab.json`, `tokenizer.json`, `language_model.onnx`), so a flat
+     * layout would have one silently overwrite another's weights.
+     */
+    @Test
+    fun `each voice engine downloads into its own folder`() {
+        val folders = ModelCatalog.VOICE_ENGINES.map { engine ->
+            val dirs = engine.files.map { it.localName.substringBeforeLast('/') }.distinct()
+            assertEquals("${engine.id} spans folders $dirs", 1, dirs.size)
+            dirs.first()
+        }
+        assertEquals("engines share a folder", folders.size, folders.distinct().size)
+    }
+
+    /**
+     * Indri's decoder comes from Kyutai's Mimi repo, not from Indri's own —
+     * Indri ships the language model only. If that entry ever disappears the
+     * engine downloads happily and then cannot produce a waveform at all.
+     */
+    @Test
+    fun `indri ships a mimi decoder alongside its language model`() {
+        val indri = ModelCatalog.INDRI_TTS
+        val leaves = indri.files.map { it.localName.substringAfterLast('/') }
+        assertTrue("no mimi decoder", leaves.contains("mimi_decoder.onnx"))
+        assertTrue("no language model", leaves.contains("indri_lm.onnx"))
+
+        val decoder = indri.files.first { it.localName.endsWith("mimi_decoder.onnx") }
+        assertTrue(
+            "decoder must come from the mimi repo",
+            decoder.urls.all { it.contains("kyutai-mimi-ONNX") }
+        )
+        // fp16: int8's own quantization error (15.6 dB) exceeds the padding
+        // error it would be masking. See tools/probe_tts5.py.
+        assertTrue(
+            "decoder should be the fp16 export",
+            decoder.urls.all { it.contains("fp16") }
+        )
+    }
+
+    /** DhVaani needs all three graphs plus both npz files and its vocabulary. */
+    @Test
+    fun `dhvaani ships every piece its pipeline needs`() {
+        val leaves = ModelCatalog.DHVAANI_TTS.files
+            .map { it.localName.substringAfterLast('/') }
+            .toSet()
+        listOf(
+            "text_encoder.onnx", "fm_decoder.onnx", "vocoder_backbone.onnx",
+            "vocos_head.npz", "mel_fb.npz", "tokens.txt"
+        ).forEach { assertTrue("dhvaani is missing $it", it in leaves) }
+    }
+
+    /** Indri is research-only and cannot be presented as freely usable. */
+    @Test
+    fun `restrictive licences are stated`() {
+        assertTrue(
+            ModelCatalog.INDRI_TTS.license.contains("research", ignoreCase = true) ||
+                ModelCatalog.INDRI_TTS.license.contains("CC-BY-SA")
+        )
+        assertTrue(ModelCatalog.NLLB.license.contains("NC"))
+    }
+
+    /**
+     * The point of adding DhVaani: it is far smaller than Chatterbox, and if a
+     * future edit inflates it past that the reason to offer it is gone.
+     */
+    @Test
+    fun `dhvaani stays much smaller than chatterbox`() {
+        assertTrue(
+            "dhvaani ${ModelCatalog.DHVAANI_TTS.sizeMb} MB vs " +
+                "chatterbox ${ModelCatalog.CHATTERBOX_Q4.sizeMb} MB",
+            ModelCatalog.DHVAANI_TTS.sizeBytes < ModelCatalog.CHATTERBOX_Q4.sizeBytes / 2
+        )
+        assertTrue(
+            ModelCatalog.DHVAANI_TTS.ramBytes < ModelCatalog.CHATTERBOX_Q4.ramBytes
+        )
+    }
 }
