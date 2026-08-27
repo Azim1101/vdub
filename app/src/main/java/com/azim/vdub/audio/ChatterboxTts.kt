@@ -44,7 +44,24 @@ class ChatterboxTts private constructor(
         private const val NUM_HIDDEN_LAYERS = 30
         private const val NUM_KV_HEADS = 16
         private const val HEAD_DIM = 64
-        private const val MAX_NEW_TOKENS = 1000
+        /**
+         * Hard ceiling on speech tokens for one line.
+         *
+         * This is a memory bound, not a quality one. Every generated token
+         * lengthens the KV cache — 30 layers x 2 x 16 heads x 64 dims x 4
+         * bytes per position — and the cache is briefly held twice while each
+         * step swaps old for new. At 1000 tokens that is ~560 MB of cache on
+         * top of ~1.1 GB of weights, which is enough for Android's low-memory
+         * killer to take down the launcher along with the app.
+         *
+         * 500 tokens is ~20 s of speech. No subtitle line needs that; a line
+         * that reaches it is a model that failed to emit STOP, and truncating
+         * it costs one bad clip instead of the whole device.
+         */
+        private const val MAX_NEW_TOKENS = 500
+
+        /** Speech tokens per second of audio, used to size a line's budget. */
+        private const val TOKENS_PER_SECOND = 25
 
         fun open(paths: VoiceEngine.Paths, threads: Int = 4): ChatterboxTts {
             val missing = paths.missing
@@ -168,6 +185,16 @@ class ChatterboxTts private constructor(
         val inputIds = tokenizer.encode(prepared)
         require(inputIds.isNotEmpty()) { "nothing to speak" }
 
+        // Budget tokens against the text's own length rather than always
+        // allowing the global maximum. Hindi runs at roughly 15 characters a
+        // second, so a short line that starts looping is cut off early instead
+        // of growing the KV cache for another 400 steps. Generous headroom
+        // (3x plus a floor) so normal delivery is never clipped.
+        val expectedSeconds = prepared.length / 15.0
+        val budget = ((expectedSeconds * 3.0 + 4.0) * TOKENS_PER_SECOND)
+            .toInt()
+            .coerceIn(100, MAX_NEW_TOKENS)
+
         // Text positions count up; speech tokens are pinned to 0, matching the
         // reference implementation.
         val positionIds = LongArray(inputIds.size) { i ->
@@ -189,7 +216,7 @@ class ChatterboxTts private constructor(
         generated.add(ChatterboxTokenizer.START_SPEECH_TOKEN.toLong())
 
         try {
-            for (step in 0 until MAX_NEW_TOKENS) {
+            for (step in 0 until budget) {
                 coroutineContext.ensureActive()
 
                 val (logits, present) = runLanguageModel(embeds, attention, past)

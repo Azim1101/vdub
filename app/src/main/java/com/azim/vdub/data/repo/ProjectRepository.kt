@@ -1,5 +1,6 @@
 package com.azim.vdub.data.repo
 
+import android.app.ActivityManager
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -15,6 +16,7 @@ import com.azim.vdub.audio.WavIo
 import com.azim.vdub.audio.resampleLinear
 import com.azim.vdub.audio.SpeakerCluster
 import com.azim.vdub.audio.SpeakerEmbedder
+import com.azim.vdub.core.ModelCatalog
 import com.azim.vdub.core.VdubPaths
 import com.azim.vdub.data.local.ClipDao
 import com.azim.vdub.data.local.ClipEntity
@@ -823,6 +825,8 @@ class ProjectRepository @Inject constructor(
         val lines = script.lines.filter { it.hi.isNotBlank() }
         check(lines.isNotEmpty()) { "No translated lines to speak" }
 
+        requireMemoryFor(engineId)
+
         VdubPaths.hiClipsDir(project).mkdirs()
         val paths = VoiceEngine.pathsFor(engineId)
 
@@ -941,6 +945,50 @@ class ProjectRepository @Inject constructor(
     }
 
     /**
+     * Refuse to start speaking if the device cannot hold the engine.
+     *
+     * Running out of memory here does not produce a crash the user can report:
+     * Android's low-memory killer takes the launcher and system UI down with
+     * the app, which looks like a spontaneous reboot and leaves no stack
+     * trace. A check up front turns that into a sentence explaining what to do.
+     *
+     * `availMem` is used rather than total RAM because what matters is what is
+     * free right now — the same phone succeeds with nothing else open and dies
+     * with a browser in the background.
+     */
+    private fun requireMemoryFor(engineId: String) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return
+        val info = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(info)
+
+        val engine = VoiceEngine.byId(engineId)
+        val needed = engine.ramBytes
+        // Leave room for the OS and the rest of the app on top of the engine.
+        val headroom = 350_000_000L
+
+        if (info.lowMemory || info.availMem < needed + headroom) {
+            val availMb = info.availMem / 1024 / 1024
+            val neededMb = (needed + headroom) / 1024 / 1024
+            val lighter = ModelCatalog.VOICE_ENGINES
+                .filter { it.ramBytes + headroom < info.availMem && it.id != engineId }
+                .minByOrNull { it.ramBytes }
+
+            error(
+                "Not enough free memory for ${engine.name}: about $availMb MB " +
+                    "free, ~$neededMb MB needed.\n\n" +
+                    (lighter?.let {
+                        "Switch to ${it.name} in Settings → Voice engine " +
+                            "(~${it.ramMb} MB), or close"
+                    } ?: "Close") +
+                    " other apps and try again.\n\n" +
+                    "Continuing would let Android kill the launcher along with " +
+                    "this app, which looks like the phone restarting."
+            )
+        }
+    }
+
+    /**
      * Build one speaker's voice for whichever engine is loaded.
      *
      * Three engines clone from a reference clip and one does not, and one of
@@ -999,7 +1047,21 @@ class ProjectRepository @Inject constructor(
     private fun buildReference(project: String, speaker: String, refs: List<File>): File {
         val safe = speaker.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val target = File(VdubPaths.outDir(project), "ref_$safe.wav")
-        if (target.exists() && target.length() > WAV_MIN_BYTES) return target
+
+        // A cached reference is only reusable if it also satisfies the current
+        // cap. Projects created before the cap existed still have a 44 s
+        // ref_*.wav sitting in out/, and returning it here made the cap a
+        // no-op for exactly the users who had already hit the crash — they
+        // installed the fix and saw no change. Rebuild anything over-long.
+        if (target.exists() && target.length() > WAV_MIN_BYTES) {
+            val cachedBytes = target.length() - WavIo.HEADER_BYTES
+            val cachedMax = runCatching {
+                val f = WavIo.readFormat(target)
+                (MAX_REFERENCE_SECONDS * f.sampleRate).toLong() * 2 * f.channels
+            }.getOrDefault(0L)
+            if (cachedMax > 0 && cachedBytes <= cachedMax) return target
+            target.delete()
+        }
 
         val fmt = WavIo.readFormat(refs.first())
         val maxBytes = (MAX_REFERENCE_SECONDS * fmt.sampleRate).toInt() *

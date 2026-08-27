@@ -150,4 +150,73 @@ class ReferenceLengthTest {
         val minBytes = 44 + 16_000 * 2          // WAV_MIN_BYTES
         assertTrue(capBytes > minBytes * 4)
     }
+
+    /**
+     * The stale-cache regression: installing the cap changed nothing for the
+     * users who had already hit the crash.
+     *
+     * buildReference caches its result as out/ref_<speaker>.wav and returned
+     * any existing file that passed a *minimum* size check. A project created
+     * before the cap existed therefore kept handing the engine its old 44 s
+     * reference, so the fix was a no-op precisely where it was needed. The
+     * cached file must be validated against the cap, not just against zero.
+     */
+    @Test
+    fun `an over-long cached reference is not reusable`() {
+        val sampleRate = 16_000
+        val channels = 1
+        val cap = (ProjectRepository.MAX_REFERENCE_SECONDS * sampleRate).toLong() *
+            2 * channels
+
+        fun cachedBytesFor(seconds: Double) =
+            (seconds * sampleRate).toLong() * 2 * channels
+
+        // what the old build left on disk
+        assertTrue("44 s cache must be rejected", cachedBytesFor(44.1) > cap)
+        // what the new build writes
+        assertTrue(
+            "a freshly capped cache must be accepted",
+            cachedBytesFor(ProjectRepository.MAX_REFERENCE_SECONDS) <= cap
+        )
+        // and something comfortably short stays valid
+        assertTrue("a 5 s cache must be accepted", cachedBytesFor(5.0) <= cap)
+    }
+
+    /**
+     * Generation is bounded too. The reference is only half the sequence — every
+     * token the model emits also lengthens the KV cache, so a line that never
+     * emits STOP could reach the old 1000-token ceiling and ~1.66 GB.
+     */
+    @Test
+    fun `generation budget keeps the sequence bounded`() {
+        val tokensPerSecond = 25
+        val maxTokens = 500
+
+        fun budgetFor(chars: Int): Int {
+            val expected = chars / 15.0
+            return ((expected * 3.0 + 4.0) * tokensPerSecond).toInt()
+                .coerceIn(100, maxTokens)
+        }
+
+        // A short line must not be allowed to run away.
+        assertTrue("a 10-char line got too much budget", budgetFor(10) < maxTokens)
+        // But every line gets enough headroom for normal delivery: a 3x margin
+        // over the expected length, so nothing is clipped mid-word.
+        for (chars in listOf(10, 30, 60, 100)) {
+            val spoken = budgetFor(chars).toDouble() / tokensPerSecond
+            assertTrue(
+                "$chars chars: budget ${spoken}s is under its own ${chars / 15.0}s",
+                spoken > chars / 15.0 * 2
+            )
+        }
+        // And the ceiling holds no matter how long the text is.
+        assertEquals(maxTokens, budgetFor(10_000))
+
+        val peak = kvCacheBytes((ProjectRepository.MAX_REFERENCE_SECONDS *
+            tokensPerSecond).toInt() + maxTokens) * 2 + 1_100_000_000L
+        assertTrue(
+            "worst-case peak ${peak / 1024 / 1024} MB is too high",
+            peak < 1_550_000_000L
+        )
+    }
 }
