@@ -16,6 +16,7 @@ on:
       - 'tools/probe_tts2.py'
       - 'tools/probe_tts3.py'
       - 'tools/probe_tts4.py'
+      - 'tools/probe_tts5.py'
 
 # Without this the token is read-only and the commit comment — the only
 # channel out of here the sandbox can actually read — is silently dropped.
@@ -47,7 +48,7 @@ jobs:
         run: |
           set -o pipefail
           : > /tmp/probe.log
-          for s in ${PROBES:-tools/probe_tts4.py}; do
+          for s in ${PROBES:-tools/probe_tts5.py}; do
             echo "######## $s ########" | tee -a /tmp/probe.log
             python "$s" 2>&1 | tee -a /tmp/probe.log
           done
