@@ -184,10 +184,19 @@ jobs:
               | sed 's/^id: \([0-9][0-9]*\).*/\1/' | tail -1)
           echo "device id: $DEV"
           [ -n "$DEV" ] || { cat /tmp/devlist.out; exit 1; }
-          # --device takes the id; </dev/null makes any stray prompt fail
-          # loudly instead of dying the old silent way.
-          "$AVDM" create avd -n ci -k "system-images;android-30;default;x86_64" \
-            --device "$DEV" --force </dev/null > /tmp/avdcreate.out 2>&1
+          # --device preselects but does not suppress the prompts. The
+          # create flow asks, in order:
+          #   1. 'Do you wish to create a custom hardware profile? [no]'
+          #      — rejects 'no' and '1' alike ("X is not a valid reply");
+          #      a single letter is what it wants, 'n' for the default
+          #   2. the device menu, which takes the numeric id
+          # and a prompt left at EOF aborts *silently with exit 0* and no
+          # AVD — the death of every earlier attempt. So both answers go
+          # up front, and the exit code plus the list-avds guard below
+          # decide what actually happened.
+          printf 'n\n%s\n' "$DEV" | "$AVDM" create avd \
+            -n ci -k "system-images;android-30;default;x86_64" --force \
+            > /tmp/avdcreate.out 2>&1
           CREATE_EXIT=$?
           echo "create exit: $CREATE_EXIT"
           tail -15 /tmp/avdcreate.out
