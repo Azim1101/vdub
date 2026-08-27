@@ -1,0 +1,61 @@
+name: TTS probe
+
+# Diagnostic only. The dev sandbox cannot reach huggingface.co, so the exact
+# ONNX input/output signatures of a new engine have to be read somewhere that
+# can. Guessing them means the app fails on a phone, hours into a download.
+#
+# Reports through the job summary and a commit comment, because Actions log
+# artifacts are not reachable from the sandbox either.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/tts-probe.yml'
+      - 'tools/probe_tts.py'
+
+jobs:
+  probe:
+    name: Read model signatures
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install runtime
+        run: pip install -q onnxruntime numpy onnx
+
+      - name: Probe
+        id: probe
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python tools/probe_tts.py 2>&1 | tee /tmp/probe.log
+
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## TTS probe: ${{ steps.probe.outcome }}"
+            echo '```'
+            cat /tmp/probe.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "TTS probe on \`${GITHUB_SHA:0:7}\` — ${{ steps.probe.outcome }}"
+            echo
+            echo '```'
+            tail -c 60000 /tmp/probe.log
+            echo '```'
+          } > /tmp/comment.md
+          gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@/tmp/comment.md >/dev/null || true
