@@ -155,11 +155,17 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun `tts stays chatterbox, and voice cloning is the point`() {
+    fun `voice cloning stays reachable`() {
         val tts = ModelCatalog.forStage(ModelCatalog.Stage.TTS)
         assertTrue(tts.isNotEmpty())
-        assertTrue(tts.all { it.name.contains("Chatterbox", ignoreCase = true) })
-        assertTrue(tts.any { it.description.contains("Clones", ignoreCase = true) })
+        // Cloning the original actor is the point of the pipeline, so at least
+        // one selectable engine must still do it however many are added.
+        val cloning = ModelCatalog.CLONING_ENGINES
+        assertTrue("no cloning engine left", cloning.isNotEmpty())
+        assertTrue(cloning.all { it.runnable })
+        assertTrue(
+            cloning.any { it.description.contains("Clones", ignoreCase = true) }
+        )
     }
 
     /**
@@ -167,12 +173,17 @@ class ModelCatalogTest {
      * can never run.
      */
     @Test
-    fun `both voice engines are runnable and distinct`() {
+    fun `every voice engine is runnable and distinct`() {
         val engines = ModelCatalog.VOICE_ENGINES
-        assertEquals(2, engines.size)
-        assertEquals(listOf("chatterbox_q4", "chatterbox_mix"), engines.map { it.id })
+        assertEquals(
+            listOf("chatterbox_q4", "chatterbox_mix", "dhvaani", "indri"),
+            engines.map { it.id }
+        )
+        // An engine the app cannot execute must never be offered as a choice —
+        // chatterbox_hi is in the catalog for visibility but is not selectable.
         assertTrue(engines.all { it.runnable })
         assertEquals(engines.size, engines.map { it.id }.distinct().size)
+        assertTrue(ModelCatalog.CHATTERBOX_HI !in engines)
     }
 
     /**
@@ -181,24 +192,48 @@ class ModelCatalogTest {
      */
     @Test
     fun `voice engines do not share any file path`() {
-        val (a, b) = ModelCatalog.VOICE_ENGINES
-        val pathsA = a.files.map { it.localName }.toSet()
-        val pathsB = b.files.map { it.localName }.toSet()
-        assertTrue("packs overlap: ${pathsA intersect pathsB}", (pathsA intersect pathsB).isEmpty())
+        val engines = ModelCatalog.VOICE_ENGINES
+        for (i in engines.indices) {
+            for (j in i + 1 until engines.size) {
+                val a = engines[i].files.map { it.localName }.toSet()
+                val b = engines[j].files.map { it.localName }.toSet()
+                assertTrue(
+                    "${engines[i].id} and ${engines[j].id} overlap: ${a intersect b}",
+                    (a intersect b).isEmpty()
+                )
+            }
+        }
     }
 
     /** Each pack must ship the four graphs the pipeline runs. */
     @Test
-    fun `each voice engine ships all four graphs`() {
+    fun `each chatterbox pack ships all four graphs`() {
+        ModelCatalog.VOICE_ENGINES
+            .filter { it.id.startsWith("chatterbox") }
+            .forEach { engine ->
+                val leaf = engine.files.map { it.localName.substringAfterLast('/') }
+                listOf("embed_tokens.onnx", "speech_encoder.onnx", "conditional_decoder.onnx")
+                    .forEach { g -> assertTrue("${engine.id} missing $g", leaf.contains(g)) }
+                assertTrue(
+                    "${engine.id} has no language model",
+                    leaf.any { it.startsWith("language_model") }
+                )
+                assertTrue("${engine.id} has no tokenizer", leaf.contains("tokenizer.json"))
+            }
+    }
+
+    /**
+     * Whatever the shape of an engine, it must ship at least one graph to run
+     * and its files must all be reachable — an entry that downloads nothing
+     * executable would install "successfully" and then fail to open.
+     */
+    @Test
+    fun `every voice engine ships something runnable`() {
         ModelCatalog.VOICE_ENGINES.forEach { engine ->
-            val leaf = engine.files.map { it.localName.substringAfterLast('/') }
-            listOf("embed_tokens.onnx", "speech_encoder.onnx", "conditional_decoder.onnx")
-                .forEach { g -> assertTrue("${engine.id} missing $g", leaf.contains(g)) }
             assertTrue(
-                "${engine.id} has no language model",
-                leaf.any { it.startsWith("language_model") }
+                "${engine.id} has no onnx graph",
+                engine.files.any { it.localName.endsWith(".onnx") }
             )
-            assertTrue("${engine.id} has no tokenizer", leaf.contains("tokenizer.json"))
         }
     }
 
