@@ -98,8 +98,15 @@ jobs:
 
       # Actions artifacts require a logged-in GitHub session and expire; a
       # release asset can be downloaded straight onto a phone.
+      # The APK is published from whichever working branch is current, so a
+      # phone can install the build being worked on rather than only the one
+      # from the branch that happened to be active when this was written.
       - name: Publish rolling debug release
-        if: success() && github.ref_name == 'arena/01a032f2-vdub'
+        if: >-
+          success() &&
+          (github.ref_name == 'arena/01a032f2-vdub' ||
+           github.ref_name == 'arena/01a040f1-vdub' ||
+           github.ref_name == 'arena/01a04149-vdub')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,14 +114,33 @@ jobs:
           gh release delete step1-latest --yes --cleanup-tag || true
           gh release create step1-latest vdub-step1-debug.apk \
             --target "${GITHUB_SHA}" \
-            --title "vdub Step 1 — debug APK" \
-            --notes "Debug build of Step 1 (video upload, player, subtitles, trim).
+            --title "vdub — debug APK (4 voice engines)" \
+            --notes "Debug build of the full pipeline.
 
-          Commit: \`${GITHUB_SHA:0:7}\`
+          Commit: \`${GITHUB_SHA:0:7}\` · branch \`${GITHUB_REF_NAME}\`
+
+          **Voice engines — pick one in Settings → Voice engine.** Only the
+          selected engine is downloaded, so peak RAM is one engine, not the sum.
+
+          | Engine | Download | Speed | Clones the actor? |
+          |---|---|---|---|
+          | **DhVaani 0.5** | **182 MB** | **faster than real time** | yes |
+          | Chatterbox Q4 | 791 MB | ~1 min/line | yes |
+          | Chatterbox mix | 1487 MB | ~1 min/line | yes |
+          | Indri 0.1 | 465 MB | ~15x slower than real time | no — presets |
+
+          DhVaani is the one to try for Hindi: six times smaller than
+          Chatterbox, generates faster than real time on a phone CPU,
+          Apache-2.0, and no watermark — while still cloning zero-shot.
+
+          Indri uses preset voices and cannot reproduce the original speaker;
+          the app says so before you start a run.
 
           Install: download the APK on your phone and allow install from unknown
           sources. On first run, grant **All files access** via the folder icon —
-          the pipeline reads and writes /storage/emulated/0/AI/ directly."
+          the pipeline reads and writes /storage/emulated/0/AI/ directly.
+          Models are not bundled: fetch the ones you need from
+          **Settings → Models**."
 
       # Runs the app on a real Android image. Unit tests cannot cover
       # MediaCodec, MediaMuxer or ONNX Runtime, which is where every on-device
