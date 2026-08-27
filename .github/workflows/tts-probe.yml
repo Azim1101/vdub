@@ -14,6 +14,7 @@ on:
       - '.github/workflows/tts-probe.yml'
       - 'tools/probe_tts.py'
       - 'tools/probe_tts2.py'
+      - 'tools/probe_tts3.py'
 
 # Without this the token is read-only and the commit comment — the only
 # channel out of here the sandbox can actually read — is silently dropped.
@@ -36,7 +37,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install runtime
-        run: pip install -q onnxruntime numpy onnx transformers
+        run: pip install -q onnxruntime numpy onnx transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Probe
         id: probe
@@ -45,7 +46,7 @@ jobs:
         run: |
           set -o pipefail
           : > /tmp/probe.log
-          for s in ${PROBES:-tools/probe_tts2.py}; do
+          for s in ${PROBES:-tools/probe_tts3.py}; do
             echo "######## $s ########" | tee -a /tmp/probe.log
             python "$s" 2>&1 | tee -a /tmp/probe.log
           done
