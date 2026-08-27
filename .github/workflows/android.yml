@@ -139,10 +139,13 @@ jobs:
       # Set up the emulator by hand rather than via the action: its failures
       # arrive as a bare "exit code 2", and this workspace cannot read Actions
       # logs, so each stage has to report for itself.
+      # No continue-on-error: a green run must mean the emulator stage ran.
+      # The step previously carried continue-on-error and was reported as
+      # success for two weeks while dying at AVD creation — the job badge
+      # read "instrumented passed" on runs that never booted an emulator.
       - name: Instrumented tests
         if: success()
         id: instrumented
-        continue-on-error: true
         timeout-minutes: 35
         run: |
           set -x
@@ -160,17 +163,16 @@ jobs:
             | grep -v "Unzipping\|^\[=" || true
 
           echo "== create avd =="
-          # avdmanager asks about a custom hardware profile and, piped from
-          # `echo no`, consumed the answer without creating anything — the
-          # emulator then died on "Unknown AVD name". Feed it a stream that
-          # cannot run out, and verify the AVD exists before booting.
-          # --silent hid avdmanager's own error, so the only symptom was the
-          # missing AVD one stage later. Let it speak, and give it a real "no"
-          # on stdin rather than a pipe it can outlive.
-          printf 'no\n' > /tmp/avd-answer
-          "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n ci -k "system-images;android-30;default;x86_64" --force \
-            < /tmp/avd-answer || {
+          # avdmanager asks "Do you wish to create a custom hardware profile?"
+          # and, when stdin runs out at that prompt, it aborts *silently with
+          # exit 0* and creates nothing — the only symptom is the missing AVD
+          # two stages later, and no error to report. A single "no" (a piped
+          # `echo no` or a one-line file) always runs out, because the tool
+          # consumes the line and then needs the next one. `yes no` is the
+          # stream that cannot run out: an endless run of "no", which is the
+          # right answer to every prompt this invocation asks.
+          yes no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n ci -k "system-images;android-30;default;x86_64" --force || {
               echo "avdmanager exited $?"
               ls -la "$HOME/.android/avd" 2>&1 || true
               exit 1
@@ -178,6 +180,10 @@ jobs:
           "$SDK/emulator/emulator" -list-avds
           "$SDK/emulator/emulator" -list-avds | grep -qx ci \
             || { echo "AVD 'ci' was not created"; exit 1; }
+          # The default profile's 1.5 GB RAM leaves little headroom for the
+          # DhVaani smoke test's ~600 MB working set plus ORT.
+          yes no | "$SDK/cmdline-tools/latest/bin/avdmanager" update avd \
+            -n ci --force --set hw.ramSize=2048
 
           echo "== boot =="
           "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
