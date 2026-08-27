@@ -14,7 +14,7 @@ video → subtitles → per-line clips → speakers → emotion → translation 
 | 2 | Speaker diarization (CAM++) | ✅ done |
 | 3 | Emotion detection (emotion2vec+) | ✅ done |
 | 4 | Translation (NLLB-200) | model wired, stage next |
-| 5 | Voice cloning + speech | ✅ done |
+| 5 | Voice cloning + speech (4 engines) | ✅ done |
 | 6 | Timing fit + video mux | ✅ done |
 
 ---
@@ -41,8 +41,8 @@ each stage closes its ONNX session before the next opens.
 
 | | |
 |---|---|
-| Disk — the models you need | **1.72 GB** (Q4 voice) / 2.40 GB (mix) |
-| **Peak RAM** | **591 MB** analysis · **1.1–1.6 GB** while speaking |
+| Disk — the models you need | **1.13 GB** (DhVaani voice) / 1.72 GB (Q4) / 2.40 GB (mix) |
+| **Peak RAM** | **591 MB** analysis · **0.6–1.6 GB** while speaking, by engine |
 
 A unit test pins that invariant so it cannot quietly regress.
 
@@ -59,8 +59,10 @@ with size, licence, purpose, disk used and free space.
 | SenseVoice ASR | 237 MB | Transcribe | no — only if you have no SRT |
 | emotion2vec+ base | 355 MB | Emotion | yes |
 | NLLB-200 distilled 600M | 591 MB | Translate | yes · CC-BY-NC |
-| Chatterbox Q4 (small + fast) | 791 MB | Voice | one of two · MIT |
-| Chatterbox mix (Q4 LLM) | 1487 MB | Voice | one of two · MIT |
+| Chatterbox Q4 (small + fast) | 791 MB | Voice | one of four · MIT |
+| Chatterbox mix (Q4 LLM) | 1487 MB | Voice | one of four · MIT |
+| DhVaani 0.5 (Indic, fast) | 182 MB | Voice | one of four · Apache-2.0 |
+| Indri 0.1 (preset voices) | 465 MB | Voice | one of four · research only |
 | Chatterbox Hindi INT8 (PyTorch) | 628 MB | Voice | no — not runnable yet |
 
 Every file has two mirrors (huggingface.co and hf-mirror.com), transfers are
@@ -192,13 +194,28 @@ sad 0.9×.
 
 ## Voice engines — pick one
 
-Two Chatterbox packs, selectable in **Settings → Voice engine**. Only the
-selected one is downloaded and loaded, so peak RAM is one engine, never both.
+Four engines, selectable in **Settings → Voice engine**. Only the selected one
+is downloaded and loaded, so peak RAM is one engine, never the sum.
+
+| | Download | RAM | Speed | Clones? | Licence |
+|---|---|---|---|---|---|
+| **DhVaani 0.5** | **182 MB** | ~600 MB | **0.84× RTF** | ✅ | Apache-2.0 |
+| Chatterbox Q4 | 791 MB | ~1.1 GB | ~1 min/line | ✅ | MIT |
+| Chatterbox mix | 1487 MB | ~1.6 GB | ~1 min/line | ✅ | MIT |
+| Indri 0.1 | 465 MB | ~900 MB | ~15× RTF | ❌ preset | research only |
+
+**DhVaani is the one to use for Hindi.** It is six times smaller than
+Chatterbox, generates *faster than real time* on a phone CPU, is Apache-2.0,
+and carries no watermark — while still cloning zero-shot. The speed comes from
+its structure: it is flow matching, not an autoregressive loop, so a line is
+denoised in a fixed 8 passes rather than emitted one token at a time. It also
+conditions on the reference *transcript* as well as its audio, so the app
+passes the source text of the exact clips it cloned from.
+
+### The two Chatterbox packs
 
 | | Q4 | mix |
 |---|---|---|
-| Download | **791 MB** | 1487 MB |
-| RAM while speaking | ~1.1 GB | ~1.6 GB |
 | speech_encoder (clone identity) | Q4 | **FP32** |
 | conditional_decoder (audio) | Q4 | **FP32** |
 | language_model | Q4 | Q4 |
@@ -211,15 +228,65 @@ voice-carrying parts untouched.
 
 Two implementation details worth knowing:
 
-- **Separate folders.** Both packs use identical filenames for entirely
-  different weights, so sharing a folder would have one silently overwrite the
-  other.
+- **Separate folders.** Every engine gets its own. The four share leaf names
+  (`vocab.json`, `tokenizer.json`, `language_model.onnx`) for entirely
+  different weights, so a flat layout would have one silently overwrite
+  another.
 - **`language_model_q4.onnx` keeps its upstream name** in the mix pack. An
   external-data graph hardcodes its `.onnx_data` filename, so renaming it fails
   at load time rather than at download time.
 
 Both need `repetition_penalty = 1.2` — the upstream default of 2.0 makes the
 quantized language model loop forever.
+
+### Indri, and the decoder that had to be repaired
+
+Indri is a 124M GPT-2 that emits [Mimi](https://huggingface.co/kyutai/mimi)
+codec tokens. It is here because it is small and its Hindi presets are natural,
+but it **cannot clone** — it conditions on a `[spkr_NN]` token, not on a
+reference clip. Step 5 says so before a multi-hour run rather than after, and
+assigns each speaker a different preset so at least they stay distinct.
+
+Getting it to produce audio at all took some work, and the reasoning is worth
+recording:
+
+Indri's repo ships the language model only — Mimi does not export to ONNX from
+`transformers`, so upstream points at llama.cpp for the waveform. A community
+ONNX export of Mimi does exist, but its decoder input is frozen at **32
+codebooks** while Indri emits **8**.
+
+The obvious fix is to pad the other 24 with index 0. It runs, and it is wrong:
+
+| padding | SNR vs the 8-codebook decode upstream performs |
+|---|---|
+| zeros | **6.8 dB** — audibly wrong |
+| cancelling indices | **34.4 dB** — inaudible |
+
+Measured in PyTorch with no quantization involved, so it is the padding and not
+the export. The reason is that Mimi's residual quantizer decodes by *summing*
+one embedding per codebook:
+
+```
+latent = proj( Σ_q  codebook_q[ index_q ] )
+```
+
+so index 0 in the unused 24 adds a constant `C = Σ codebook_q[0]` to every
+frame — and index 0 is an ordinary trained vector, not silence. ‖C‖ is 1.38,
+more than three times a typical single codebook vector (0.42).
+
+But nothing requires index 0. Any index is legal, and 24 codebooks × 2048
+entries leaves plenty of freedom to choose a set that cancels. Solving disjoint
+pairs exactly and then running coordinate descent brings ‖C‖ from **1.383 to
+0.045** — a 31× reduction, and the decode from 6.8 dB to 34.4 dB. Those indices
+are pinned in `MimiDecoder.PADDING_INDICES` and covered by a test, because
+"tidying" them back to zeros would still produce audio, just worse.
+
+The decoder ships as **fp16**: int8's own quantization error is 15.6 dB even
+when handed all 32 real codebooks — worse than the padding error it would be
+masking — while fp16 matches fp32 at half the size.
+
+Indri is also slow. Its exported graph has no KV cache, so every token re-runs
+the whole sequence: measured 6.6 tok/s, about 15× slower than real time.
 
 ## Step 4 — Translation
 
@@ -335,6 +402,7 @@ so an interrupted run continues rather than restarting.
 | Area | Files |
 |---|---|
 | **Audio** | `AudioExtractor` (MediaCodec → 16 kHz), `WavIo` (RIFF + slicing), `ClipCutter`, `Fbank` (kaldi filterbank) |
+| **Voice** | `TtsEngine` (the interface Step 5 speaks to), `ChatterboxTts`, `DhVaaniTts`, `IndriTts`, `MimiDecoder`, `VoiceEngine` (id → files → class), `NpzReader` |
 | **Models** | `SpeakerEmbedder` (CAM++), `SpeakerCluster` (average-linkage AHC), `EmotionClassifier` (emotion2vec + head) |
 | **Subtitles** | `SrtParser` (parse, merge, render) |
 | **Net** | `VideoResolver`, `DownloadClient`, `ModelDownloader` |
@@ -385,12 +453,18 @@ CI builds the APK on every push and republishes the `step1-latest` release.
   real ONNX export, includes Hindi, and keeps zero-shot cloning and exaggeration
   control. Two packs are offered — see [Voice engines](#voice-engines--pick-one).
   The lite entry is kept but marked optional and not runnable.
-- **Speaking is the heavy stage** — 1.1–1.6 GB RAM and roughly a minute per
-  line on a phone CPU, versus 591 MB for everything before it. Generation must
-  use `repetition_penalty = 1.2`; the upstream default of 2.0 makes this
-  quantized build loop forever.
+- **Speaking is the heavy stage on Chatterbox** — 1.1–1.6 GB RAM and roughly a
+  minute per line, versus 591 MB for everything before it. Generation must use
+  `repetition_penalty = 1.2`; the upstream default of 2.0 makes the quantized
+  build loop forever. DhVaani is the way out of that: 600 MB and faster than
+  real time.
 - Chatterbox output carries a **PerTh watermark** (upstream behaviour), and you
-  should have permission from whoever owns a voice before cloning it.
+  should have permission from whoever owns a voice before cloning it. DhVaani
+  does not watermark, which does not make cloning someone's voice any more
+  yours to do.
+- **Indri cannot clone and is research-licensed.** It offers preset speakers
+  only; Step 5 says so before you start. Its LM export also has no KV cache, so
+  it is roughly 15× slower than real time.
 - **BGM separation (TIGER-DnR) is not included.** That repo ships only
   `safetensors`; converting to ONNX requires a PyTorch export step that cannot
   run on a phone.
