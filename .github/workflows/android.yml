@@ -170,8 +170,15 @@ jobs:
           # profile list varies between SDK releases, so hardcoding a device
           # name is a coin flip. Ask avdmanager for its own list and take the
           # first entry — it is, by definition, valid for this SDK.
-          DEV=$("$SDK/cmdline-tools/latest/bin/avdmanager" list device \
-              | sed -n 's/^Name: //p' | head -1)
+          "$SDK/cmdline-tools/latest/bin/avdmanager" list device \
+            > /tmp/devlist.out 2> /tmp/devlist.err
+          echo "list device exit: $?"
+          echo "--- stdout ---"; head -40 /tmp/devlist.out
+          echo "--- stderr ---"; head -10 /tmp/devlist.err
+          # The profile line has shifted format between SDK releases
+          # (plain "Name: X", indented, or on stderr), so try each.
+          DEV=$(grep -o 'Name: .*' /tmp/devlist.out /tmp/devlist.err \
+              | head -1 | sed 's/.*Name: //')
           echo "device profile: $DEV"
           [ -n "$DEV" ] || { echo "no device profile found"; exit 1; }
           "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
