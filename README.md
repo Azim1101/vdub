@@ -419,7 +419,7 @@ open, or:
 ```bash
 gradle wrapper --gradle-version 8.9
 ./gradlew assembleDebug
-./gradlew testDebugUnitTest      # 45 unit tests
+./gradlew testDebugUnitTest      # 155 unit tests
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -429,7 +429,7 @@ CI builds the APK on every push and republishes the `step1-latest` release.
 
 ### Tests
 
-45 unit tests covering the parts that fail silently rather than loudly:
+155 unit tests covering the parts that fail silently rather than loudly:
 
 | Suite | Guards |
 |---|---|
@@ -440,6 +440,19 @@ CI builds the APK on every push and republishes the `step1-latest` release.
 | `EmotionTest` | head parsing, label cleanup, exaggeration mapping |
 | `ModelCatalogTest` | mirrors are https, ids unique, **peak RAM < total** |
 | `VideoResolverTest` | media extraction from realistic markup |
+| `DhVaaniTest` | STFT constants, feature scale, step count — pinned to the shipped model |
+| `MimiPaddingTest` | the cancelling `PADDING_INDICES`, not zeros (‖C‖ 1.383 → 0.045, 34.4 dB) |
+| `IndriTokenizerTest` | GPT-2 BPE byte-level encode against reference output |
+| `NpzReaderTest` | numpy `.npz` parse — the vocoder head and mel filterbank depend on it |
+
+**Instrumented** (on a real Android image in CI, where every on-device failure
+has come from): `AudioPipelineInstrumentedTest` covers the platform codecs
+(MediaCodec, MediaMuxer, clip I/O), and `DhVaaniInstrumentedTest` runs the
+whole DhVaani engine — download, open all three graphs on **ORT Mobile**,
+enrol, and speak one line — because the probes only proved those graphs on
+desktop onnxruntime. The line it speaks is pulled off the emulator and
+published as the `dhvaani-smoke-audio` artifact, so a green build leaves
+something to listen to.
 
 ---
 

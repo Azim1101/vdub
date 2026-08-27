@@ -190,6 +190,35 @@ jobs:
 
           echo "== test =="
           ./gradlew connectedDebugAndroidTest --stacktrace
+          TESTS=$?
+
+          # The DhVaani smoke test leaves the line it spoke on the emulator.
+          # Pull it while the emulator is still up — background processes die
+          # with this step — so a human can listen to what the on-device ORT
+          # actually produced. Probes proved the graphs on x86 Linux; this is
+          # the phone stack speaking for itself.
+          echo "== pull smoke audio =="
+          mkdir -p "$GITHUB_WORKSPACE/smoke"
+          FOUND=$("$SDK/platform-tools/adb" shell \
+              "find /storage/emulated/0/Android/data/com.azim.vdub /storage/emulated/0/AI \
+               -name dhvaani_smoke_line.wav 2>/dev/null" \
+            | tr -d '\r' | head -1)
+          if [ -n "$FOUND" ]; then
+            "$SDK/platform-tools/adb" pull "$FOUND" \
+              "$GITHUB_WORKSPACE/smoke/dhvaani_smoke_line.wav"
+            {
+              echo "## DhVaani smoke audio (from the emulator)"
+              echo '```'
+              ls -lh "$GITHUB_WORKSPACE/smoke/dhvaani_smoke_line.wav"
+              echo '```'
+              echo "Pulled from \`$FOUND\`. Download the **dhvaani-smoke-audio**"
+              echo "artifact and listen — it is one line spoken by the phone stack."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(no smoke audio found — the test may not have run)" \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $TESTS
 
       - name: Report instrumented result
         if: always()
@@ -213,6 +242,16 @@ jobs:
             gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
               -F body=@/tmp/instr.md >/dev/null || true
           fi
+
+      # Always, not only on failure: a green run is exactly when the smoke
+      # audio is most worth listening to.
+      - name: Upload smoke audio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dhvaani-smoke-audio
+          path: smoke/dhvaani_smoke_line.wav
+          if-no-files-found: ignore
 
       - name: Upload test reports
         if: failure()
