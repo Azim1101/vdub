@@ -163,51 +163,46 @@ jobs:
             | grep -v "Unzipping\|^\[=" || true
 
           echo "== create avd =="
-          # Create with --device, which suppresses the prompts entirely.
-          # The prompts were a dead end: "Do you wish to create a custom
-          # hardware profile?" rejects "no" ("Error: no"), an un-answered
-          # prompt aborts with a *silent* exit 0 and no AVD, and the built-in
-          # profile list varies between SDK releases, so hardcoding a device
-          # name is a coin flip. Ask avdmanager for its own list and take the
-          # first entry — it is, by definition, valid for this SDK.
-          AVDM="$SDK/cmdline-tools/latest/bin/avdmanager"
-          "$AVDM" list device > /tmp/devlist.out 2>/tmp/devlist.err
-          echo "list device exit: $?"
-          head -12 /tmp/devlist.out
-          # The list is 'id: N or "Name"' entries. The first entries are
-          # watches and sliders, not phones, so pick the 720p phone — a
-          # screen the Compose UI actually fits — falling back to the
-          # largest screen listed.
-          DEV=$(grep '^id: ' /tmp/devlist.out | grep '720p' \
-              | sed 's/^id: \([0-9][0-9]*\).*/\1/' | head -1)
-          [ -n "$DEV" ] || DEV=$(grep '^id: ' /tmp/devlist.out \
-              | sed 's/^id: \([0-9][0-9]*\).*/\1/' | tail -1)
-          echo "device id: $DEV"
-          [ -n "$DEV" ] || { cat /tmp/devlist.out; exit 1; }
-          # --device preselects but does not suppress the prompts. The
-          # create flow asks, in order:
-          #   1. 'Do you wish to create a custom hardware profile? [no]'
-          #      — rejects 'no' and '1' alike ("X is not a valid reply");
-          #      a single letter is what it wants, 'n' for the default
-          #   2. the device menu, which takes the numeric id
-          # and a prompt left at EOF aborts *silently with exit 0* and no
-          # AVD — the death of every earlier attempt. So both answers go
-          # up front, and the exit code plus the list-avds guard below
-          # decide what actually happened.
-          printf 'n\n%s\n' "$DEV" | "$AVDM" create avd \
-            -n ci -k "system-images;android-30;default;x86_64" --force \
-            > /tmp/avdcreate.out 2>&1
-          CREATE_EXIT=$?
-          echo "create exit: $CREATE_EXIT"
-          tail -15 /tmp/avdcreate.out
-          [ "$CREATE_EXIT" = "0" ] || exit 1
+          # An AVD is just two ini files. avdmanager's create flow was a
+          # dead end: it asks interactive questions whose valid tokens are
+          # undocumented (the hardware-profile question rejects 'no' and
+          # '1' alike), its device menu is numbered by position rather than
+          # by the 'id: N' values, and — the killer — a question left at EOF
+          # makes it abort *silently with exit 0* and no AVD. Every prompt-
+          # based attempt died that way. Writing the files directly is
+          # deterministic and leaves nothing to guess.
+          #
+          # config.ini points at the system image by its package id
+          # (semicolon form, what the emulator resolves), not a hardcoded
+          # path, so it survives the image moving. 2048 MB RAM because the
+          # default profile's 1.5 GB leaves little headroom for the DhVaani
+          # smoke test's ~600 MB working set plus ORT.
+          AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$AVD_HOME/ci.avd"
+          {
+            echo "avd.id=ci"
+            echo "avd.ini.displayname=ci"
+            echo "avd.ini.encoding=UTF-8"
+            echo "path=$AVD_HOME/ci.avd"
+            echo "path.avd=$AVD_HOME/ci.avd"
+            echo "target=android-30"
+          } > "$AVD_HOME/ci.ini"
+          {
+            echo "avd.id=ci"
+            echo "avd.ini.displayname=ci"
+            echo "avd.ini.encoding=UTF-8"
+            echo "hw.cpu.arch=x86_64"
+            echo "hw.ramSize=2048"
+            echo "hw.keyboard=yes"
+            echo "image.sysdir.1=system-images;android-30;default;x86_64"
+            echo "tag.id=default"
+            echo "tag.display=Default"
+          } > "$AVD_HOME/ci.avd/config.ini"
+          echo "--- ci.ini ---"; cat "$AVD_HOME/ci.ini"
+          echo "--- config.ini ---"; cat "$AVD_HOME/ci.avd/config.ini"
           "$SDK/emulator/emulator" -list-avds
           "$SDK/emulator/emulator" -list-avds | grep -qx ci \
             || { echo "AVD 'ci' was not created"; exit 1; }
-          # The default profile's 1.5 GB RAM leaves little headroom for the
-          # DhVaani smoke test's ~600 MB working set plus ORT.
-          "$SDK/cmdline-tools/latest/bin/avdmanager" update avd \
-            -n ci --force --set hw.ramSize=2048
 
           echo "== boot =="
           "$SDK/emulator/emulator" -avd ci -no-window -gpu swiftshader_indirect \
