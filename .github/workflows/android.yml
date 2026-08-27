@@ -170,25 +170,28 @@ jobs:
           # profile list varies between SDK releases, so hardcoding a device
           # name is a coin flip. Ask avdmanager for its own list and take the
           # first entry — it is, by definition, valid for this SDK.
-          "$SDK/cmdline-tools/latest/bin/avdmanager" list device \
-            > /tmp/devlist.out 2> /tmp/devlist.err
+          AVDM="$SDK/cmdline-tools/latest/bin/avdmanager"
+          "$AVDM" list device > /tmp/devlist.out 2>/tmp/devlist.err
           echo "list device exit: $?"
-          echo "--- stdout ---"; head -40 /tmp/devlist.out
-          echo "--- stderr ---"; head -10 /tmp/devlist.err
-          # The profile line has shifted format between SDK releases
-          # (plain "Name: X", indented, or on stderr), so try each.
-          DEV=$(grep -o 'Name: .*' /tmp/devlist.out /tmp/devlist.err \
-              | head -1 | sed 's/.*Name: //')
-          echo "device profile: $DEV"
-          [ -n "$DEV" ] || { echo "no device profile found"; exit 1; }
-          "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n ci -k "system-images;android-30;default;x86_64" \
-            --device "$DEV" --force || {
-              echo "avdmanager exited $?"
-              "$SDK/cmdline-tools/latest/bin/avdmanager" list device || true
-              ls -la "$HOME/.android/avd" 2>&1 || true
-              exit 1
-            }
+          head -12 /tmp/devlist.out
+          # The list is 'id: N or "Name"' entries. The first entries are
+          # watches and sliders, not phones, so pick the 720p phone — a
+          # screen the Compose UI actually fits — falling back to the
+          # largest screen listed.
+          DEV=$(grep '^id: ' /tmp/devlist.out | grep '720p' \
+              | sed 's/^id: \([0-9][0-9]*\).*/\1/' | head -1)
+          [ -n "$DEV" ] || DEV=$(grep '^id: ' /tmp/devlist.out \
+              | sed 's/^id: \([0-9][0-9]*\).*/\1/' | tail -1)
+          echo "device id: $DEV"
+          [ -n "$DEV" ] || { cat /tmp/devlist.out; exit 1; }
+          # --device takes the id; </dev/null makes any stray prompt fail
+          # loudly instead of dying the old silent way.
+          "$AVDM" create avd -n ci -k "system-images;android-30;default;x86_64" \
+            --device "$DEV" --force </dev/null > /tmp/avdcreate.out 2>&1
+          CREATE_EXIT=$?
+          echo "create exit: $CREATE_EXIT"
+          tail -15 /tmp/avdcreate.out
+          [ "$CREATE_EXIT" = "0" ] || exit 1
           "$SDK/emulator/emulator" -list-avds
           "$SDK/emulator/emulator" -list-avds | grep -qx ci \
             || { echo "AVD 'ci' was not created"; exit 1; }
