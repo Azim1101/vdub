@@ -163,15 +163,17 @@ jobs:
             | grep -v "Unzipping\|^\[=" || true
 
           echo "== create avd =="
-          # avdmanager asks "Do you wish to create a custom hardware profile?"
-          # and, when stdin runs out at that prompt, it aborts *silently with
-          # exit 0* and creates nothing — the only symptom is the missing AVD
-          # two stages later, and no error to report. A single "no" (a piped
-          # `echo no` or a one-line file) always runs out, because the tool
-          # consumes the line and then needs the next one. `yes no` is the
-          # stream that cannot run out: an endless run of "no", which is the
-          # right answer to every prompt this invocation asks.
-          yes no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+          # avdmanager asks two things, in order:
+          #   1. "Do you wish to create a custom hardware profile?"  -> yes/no
+          #   2. "Please choose one of the following devices: 1. …"  -> a number
+          # Each answer is consumed line by line, and a prompt answered with
+          # the wrong kind of value is fatal ("no is not a valid reply"),
+          # while a prompt left at EOF is a *silent* exit 0 with no AVD —
+          # which is how every earlier attempt died. So feed the exact
+          # sequence: "no" to the profile question, "1" (the first, always
+          # valid, device) to the menu. Any trailing lines are ignored once
+          # the AVD exists.
+          printf 'no\n1\n' | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
             -n ci -k "system-images;android-30;default;x86_64" --force || {
               echo "avdmanager exited $?"
               ls -la "$HOME/.android/avd" 2>&1 || true
@@ -182,7 +184,7 @@ jobs:
             || { echo "AVD 'ci' was not created"; exit 1; }
           # The default profile's 1.5 GB RAM leaves little headroom for the
           # DhVaani smoke test's ~600 MB working set plus ORT.
-          yes no | "$SDK/cmdline-tools/latest/bin/avdmanager" update avd \
+          "$SDK/cmdline-tools/latest/bin/avdmanager" update avd \
             -n ci --force --set hw.ramSize=2048
 
           echo "== boot =="
