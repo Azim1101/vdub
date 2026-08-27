@@ -46,7 +46,6 @@ import javax.inject.Singleton
 import kotlin.coroutines.coroutineContext
 
 private const val WAV_MIN_BYTES = 44L + 16_000 * 2 * 1   // header + ~1 s at 16 kHz
-
 @Singleton
 class ProjectRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -966,7 +965,11 @@ class ProjectRepository @Inject constructor(
         val refs = referenceClipsFor(project, speaker, limit = 3)
         val ref = when {
             refs.isNotEmpty() -> buildReference(project, speaker, refs)
-            paths.defaultVoice.exists() -> paths.defaultVoice
+            // The bundled voice goes through the same trimming: it is a file
+            // like any other, and skipping the cap here would reintroduce the
+            // crash for exactly the projects that have no usable clips.
+            paths.defaultVoice.exists() ->
+                buildReference(project, "default", listOf(paths.defaultVoice))
             else -> error(
                 "No usable reference audio for $speaker — its clips " +
                     "are missing or too short to clone from."
@@ -997,16 +1000,32 @@ class ProjectRepository @Inject constructor(
         val safe = speaker.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val target = File(VdubPaths.outDir(project), "ref_$safe.wav")
         if (target.exists() && target.length() > WAV_MIN_BYTES) return target
-        if (refs.size == 1) return refs.first()
 
         val fmt = WavIo.readFormat(refs.first())
+        val maxBytes = (MAX_REFERENCE_SECONDS * fmt.sampleRate).toInt() *
+            2 * fmt.channels
+        // One long clip needs trimming just as much as three joined ones — a
+        // 44 s line is exactly the case that used to take the phone down.
+        if (refs.size == 1 && refs.first().length() - WavIo.HEADER_BYTES <= maxBytes) {
+            return refs.first()
+        }
+
         val gap = ByteArray(fmt.sampleRate / 5 * 2)      // 200 ms of silence
         val out = java.io.ByteArrayOutputStream()
         refs.forEachIndexed { i, f ->
+            if (out.size() >= maxBytes) return@forEachIndexed
             runCatching {
                 val info = WavIo.readFormat(f)
                 if (info.sampleRate != fmt.sampleRate) return@runCatching
-                val pcm = ByteArray(info.dataBytes.toInt())
+                // Read only what still fits, so a single very long clip is
+                // truncated rather than pulled into memory whole.
+                val room = maxBytes - out.size() - (if (i > 0) gap.size else 0)
+                if (room <= 0) return@runCatching
+                val want = minOf(info.dataBytes, room.toLong()).toInt()
+                // Keep it on a whole frame, or the tail becomes a click.
+                val aligned = want - want % (info.channels * 2)
+                if (aligned <= 0) return@runCatching
+                val pcm = ByteArray(aligned)
                 java.io.RandomAccessFile(f, "r").use { raf ->
                     raf.seek(info.dataOffset)
                     raf.readFully(pcm)
@@ -1119,4 +1138,36 @@ class ProjectRepository @Inject constructor(
 
     fun hasEmbeds(project: String) = VdubPaths.speakerEmbeds(project).exists()
 
+
+    companion object {
+        /**
+         * Longest reference clip handed to a voice engine, in seconds.
+         *
+         * This is a memory limit, not a quality one, and it is the difference between
+         * the app running and the phone rebooting.
+         *
+         * Chatterbox turns the reference into speech tokens at ~25/s and prepends them
+         * to the sequence it generates over, so the KV cache — 30 layers × 2 × 16 heads
+         * × 64 dims × 4 bytes per position — grows with the reference. It is also held
+         * twice for an instant while each step swaps the old cache for the new:
+         *
+         * | reference | KV cache (×2) | with Q4 weights |
+         * |-----------|---------------|-----------------|
+         * | 8 s       | ~550 MB       | ~1.6 GB         |
+         * | 44 s      | ~985 MB       | ~2.1 GB         |
+         *
+         * At 2.1 GB Android does not kill just this app — it kills the launcher and
+         * the system UI with it, which looks exactly like a reboot. A speaker with one
+         * long line was enough to trigger it, because nothing capped the reference.
+         *
+         * DhVaani has the same shape of problem for a different reason: its flow
+         * decoder attends over prompt + speech frames at 93.75 fps, so attention cost
+         * grows with the square of the reference length.
+         *
+         * Eight seconds is well past the point where zero-shot cloning stops
+         * improving — the published guidance for both engines is 3–10 s — so this
+         * costs nothing audible.
+         */
+        const val MAX_REFERENCE_SECONDS = 8.0
+    }
 }

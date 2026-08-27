@@ -453,6 +453,11 @@ CI builds the APK on every push and republishes the `step1-latest` release.
   real ONNX export, includes Hindi, and keeps zero-shot cloning and exaggeration
   control. Two packs are offered — see [Voice engines](#voice-engines--pick-one).
   The lite entry is kept but marked optional and not runnable.
+- **Reference audio is capped at 8 s per speaker.** Not a quality choice: the
+  reference is prepended to Chatterbox's generated sequence, so its KV cache
+  grows with it — a 44 s reference reached ~2.1 GB and Android's low-memory
+  killer took the launcher down with the app, which looks like the phone
+  rebooting. Zero-shot cloning stops improving well before 8 s anyway.
 - **Speaking is the heavy stage on Chatterbox** — 1.1–1.6 GB RAM and roughly a
   minute per line, versus 591 MB for everything before it. Generation must use
   `repetition_penalty = 1.2`; the upstream default of 2.0 makes the quantized

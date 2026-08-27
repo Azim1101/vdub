@@ -98,10 +98,15 @@ class Step5ViewModel @Inject constructor(
         val names = repo.readSpeakerScript(project)?.names.orEmpty()
         val plans = lines.map { it.spk }.distinct().mapIndexed { i, spk ->
             val refs = repo.referenceClipsFor(project, spk)
+            // Report what will actually be used, not what exists. The
+            // reference is capped before it reaches the engine, so showing the
+            // uncapped total told the user a speaker had 44 s of reference
+            // when 8 s is what gets cloned from.
             val secs = lines.filter { it.spk == spk }
                 .sortedByDescending { l -> l.end - l.start }
                 .take(refs.size)
                 .sumOf { l -> l.end - l.start }
+                .coerceAtMost(ProjectRepository.MAX_REFERENCE_SECONDS)
             SpeakerPlan(
                 id = spk,
                 displayName = names[spk] ?: spk,
