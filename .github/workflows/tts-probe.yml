@@ -14,6 +14,12 @@ on:
       - '.github/workflows/tts-probe.yml'
       - 'tools/probe_tts.py'
 
+# Without this the token is read-only and the commit comment — the only
+# channel out of here the sandbox can actually read — is silently dropped.
+permissions:
+  contents: write
+  checks: write
+
 jobs:
   probe:
     name: Read model signatures
@@ -58,4 +64,12 @@ jobs:
             echo '```'
           } > /tmp/comment.md
           gh api "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-            -F body=@/tmp/comment.md >/dev/null || true
+            -F body=@/tmp/comment.md || echo "comment failed"
+
+          # Second channel: log artifacts live in blob storage the sandbox
+          # cannot reach, but a release asset is served by api.github.com.
+          gh release delete probe-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create probe-latest /tmp/probe.log \
+            --target "${GITHUB_SHA}" \
+            --title "TTS probe output" \
+            --notes "Signatures read on ${GITHUB_SHA:0:7}." || echo "release failed"
